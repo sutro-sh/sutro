@@ -2,7 +2,7 @@ import click
 from colorama import Fore, Style
 import os 
 import json
-from materialized_intelligence.sdk import MaterializedIntelligence
+from src.sdk import MaterializedIntelligence
 import polars as pl
 
 CONFIG_DIR = os.path.expanduser("~/.materialized_intelligence")
