@@ -1,0 +1,29 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "materialized-intelligence"
+version = "0.0.1"
+description = "Materialized Intelligence SDK"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy==2.1.1",
+    "requests==2.32.3",
+    "pandas==2.2.2",
+    "polars==1.8.2",
+    "click==8.1.7",
+    "colorama==0.4.4",
+    "halo==0.0.31",
+]
+
+[project.scripts]
+mi = "src.cli:cli"
+
+[project.urls]
+"Homepage" = "https://materialized.dev"
+"Documentation" = "https://docs.materialized.dev"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
