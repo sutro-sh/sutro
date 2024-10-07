@@ -12,6 +12,22 @@ class MaterializedIntelligence:
         self.base_url = "https://staging.api.materialized.dev/"
 
     def check_for_api_key(self):
+        """
+        Check for an API key in the user's home directory.
+
+        This method looks for a configuration file named 'config.json' in the
+        '.materialized_intelligence' directory within the user's home directory.
+        If the file exists, it attempts to read the API key from it.
+
+        Returns:
+            str or None: The API key if found in the configuration file, or None if not found.
+
+        Note:
+            The expected structure of the config.json file is:
+            {
+                "api_key": "your_api_key_here"
+            }
+        """
         CONFIG_DIR = os.path.expanduser("~/.materialized_intelligence")
         CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
         if os.path.exists(CONFIG_FILE):
@@ -22,6 +38,18 @@ class MaterializedIntelligence:
             return None
         
     def set_api_key(self, api_key: str):
+        """
+        Set the API key for the Materialized Intelligence API.
+
+        This method allows you to set the API key for the Materialized Intelligence API.
+        The API key is used to authenticate requests to the API.
+
+        Args:
+            api_key (str): The API key to set.
+
+        Returns:
+            None
+        """
         self.api_key = api_key
 
     def infer(self, 
@@ -33,8 +61,31 @@ class MaterializedIntelligence:
         job_priority: int = 0,
         json_schema: str = None,
         num_workers: int = 1,
+        prompt_prefix: str = None,
         dry_run: bool = False
     ):
+        """
+        Run inference on the provided data.
+
+        This method allows you to run inference on the provided data using the Materialized Intelligence API.
+        It supports various data types such as lists, pandas DataFrames, polars DataFrames, and file paths.
+
+        Args:
+            data (Union[List, pd.DataFrame, pl.DataFrame, str]): The data to run inference on.
+            model (str, optional): The model to use for inference. Defaults to "llama-3.1-8b".
+            column (str, optional): The column name to use for inference. Required if data is a DataFrame.
+            output_path (str, optional): The path to save the output to. If not specified, the results will be returned as a list.
+            output_column (str, optional): The column name to store the inference results in. Defaults to "inference_result".
+            job_priority (int, optional): The priority of the job. Defaults to 0.
+            json_schema (str, optional): A JSON schema for the output. Defaults to None.
+            num_workers (int, optional): The number of workers to use for inference. Defaults to 1.
+            prompt_prefix (str, optional): A prefix prompt to add to all inputs. Defaults to None.
+            dry_run (bool, optional): If True, the method will return cost estimates instead of running inference. Defaults to False.
+
+        Returns:
+            Union[List, pd.DataFrame, pl.DataFrame, str]: The results of the inference.
+        
+        """
         if isinstance(data, list):
             input_data = data
         elif isinstance(data, (pd.DataFrame, pl.DataFrame)):
@@ -59,6 +110,11 @@ class MaterializedIntelligence:
                 input_data = df[column].to_list()
         else:
             raise ValueError("Unsupported data type. Please provide a list, DataFrame, or file path.")
+
+        if prompt_prefix:
+            if prompt_prefix[-1] != ' ':
+                prompt_prefix = prompt_prefix + ' '
+            input_data = [prompt_prefix + input_item for input_item in input_data]
 
         endpoint = f"{self.base_url}/batch-inference"
         headers = {
@@ -120,6 +176,14 @@ class MaterializedIntelligence:
                 return results
 
     def list_jobs(self):
+        """
+        List all jobs.
+
+        This method retrieves a list of all jobs associated with the API key.
+
+        Returns:
+            list: A list of job details.
+        """
         endpoint = f"{self.base_url}/list-jobs"
         headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -130,6 +194,17 @@ class MaterializedIntelligence:
         return response.json()['jobs']
 
     def get_job_status(self, job_id: str):
+        """
+        Get the status of a job by its ID.
+
+        This method retrieves the status of a job using its unique identifier.
+
+        Args:
+            job_id (str): The ID of the job to retrieve the status for.
+
+        Returns:
+            dict: The status of the job.
+        """
         endpoint = f"{self.base_url}/job-status/{job_id}"
         headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -140,6 +215,17 @@ class MaterializedIntelligence:
         return response.json()
     
     def get_job_results(self, job_id: str):
+        """
+        Get the results of a job by its ID.
+
+        This method retrieves the results of a job using its unique identifier.
+
+        Args:
+            job_id (str): The ID of the job to retrieve the results for.
+
+        Returns:
+            list: The results of the job.
+        """
         endpoint = f"{self.base_url}/job-results"
         payload = {
             "job_id": job_id
@@ -158,6 +244,17 @@ class MaterializedIntelligence:
         return response.json()['results']
 
     def cancel_job(self, job_id: str):
+        """
+        Cancel a job by its ID.
+
+        This method allows you to cancel a job using its unique identifier.
+
+        Args:
+            job_id (str): The ID of the job to cancel.
+
+        Returns:
+            dict: The status of the job.
+        """
         endpoint = f"{self.base_url}/job-cancel/{job_id}"
         headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -173,6 +270,17 @@ class MaterializedIntelligence:
         return response.json()
     
     def try_authentication(self, api_key: str):
+        """
+        Try to authenticate with the API key.
+
+        This method allows you to authenticate with the API key.
+
+        Args:
+            api_key (str): The API key to authenticate with.
+
+        Returns:
+            dict: The status of the authentication.
+        """
         endpoint = f"{self.base_url}/try-authentication"
         headers = {
             "Authorization": f"Bearer {api_key}",

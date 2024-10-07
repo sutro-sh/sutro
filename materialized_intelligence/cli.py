@@ -131,7 +131,7 @@ def results(job_id):
 @cli.command()
 @click.argument("job_id")
 def cancel(job_id):
-    """Cancel a job."""
+    """Cancel a running job."""
     sdk = get_sdk()
     sdk.cancel_job(job_id)
     click.echo(Fore.GREEN + "Job cancelled successfully." + Style.RESET_ALL)
