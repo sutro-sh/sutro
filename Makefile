@@ -5,6 +5,11 @@ build:
 	rm -rf dist
 	python -m build
 
+install:
+	@echo "Installing the project..."
+	$(MAKE) build
+	uv pip install $$(ls -t dist/*.whl | head -n 1) --force-reinstall
+
 upload:
 	@echo "Uploading to PyPI..."
 	python -m twine upload dist/*
