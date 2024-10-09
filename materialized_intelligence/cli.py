@@ -2,7 +2,7 @@ import click
 from colorama import Fore, Style
 import os 
 import json
-from src.sdk import MaterializedIntelligence
+from materialized_intelligence.sdk import MaterializedIntelligence
 import polars as pl
 
 CONFIG_DIR = os.path.expanduser("~/.materialized_intelligence")
@@ -25,7 +25,15 @@ def check_auth():
 
 def get_sdk():
     config = load_config()
-    return MaterializedIntelligence(api_key=config.get("api_key"))
+    if config.get("base_url") != None:
+        return MaterializedIntelligence(api_key=config.get("api_key"), base_url=config.get("base_url"))
+    else:
+        return MaterializedIntelligence(api_key=config.get("api_key"))
+
+def set_config_base_url(base_url: str):
+    config = load_config()
+    config["base_url"] = base_url
+    save_config(config)
 
 @click.group(invoke_without_command=True)
 @click.pass_context
@@ -121,12 +129,14 @@ def status(job_id):
 
 @cli.command()
 @click.argument("job_id")
-def results(job_id):
+@click.option("--include-inputs", is_flag=True, help="Include the inputs in the results.")
+def results(job_id, include_inputs):
     """Get the results of a job."""
     sdk = get_sdk()
-    job_results = sdk.get_job_results(job_id)
-    df = pl.DataFrame(job_results)
-    print(df)
+    job_results = sdk.get_job_results(job_id, include_inputs)
+    if job_results is not None:
+        df = pl.DataFrame(job_results)
+        print(df)
 
 @cli.command()
 @click.argument("job_id")
@@ -140,6 +150,13 @@ def cancel(job_id):
 def docs():
     """Open the Materialized Intelligence API docs."""
     click.launch("https://docs.materialized.dev")
+
+@cli.command()
+@click.argument("base_url")
+def set_base_url(base_url):
+    """Set the base URL for the Materialized Intelligence API."""
+    set_config_base_url(base_url)
+    click.echo(Fore.GREEN + f"Base URL set to {base_url}." + Style.RESET_ALL)
 
 if __name__ == "__main__":
     cli()

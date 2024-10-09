@@ -7,9 +7,9 @@ import os
 from halo import Halo
 
 class MaterializedIntelligence:
-    def __init__(self, api_key: str = None):
+    def __init__(self, api_key: str = None, base_url: str = "https://api.materialized.dev/"):
         self.api_key = api_key or self.check_for_api_key()
-        self.base_url = "https://staging.api.materialized.dev/"
+        self.base_url = base_url
 
     def check_for_api_key(self):
         """
@@ -52,6 +52,17 @@ class MaterializedIntelligence:
         """
         self.api_key = api_key
 
+    def set_base_url(self, base_url: str):
+        """
+        Set the base URL for the Materialized Intelligence API.
+
+        This method allows you to set the base URL for the Materialized Intelligence API.
+        The base URL is used to authenticate requests to the API.
+
+        Args:
+            base_url (str): The base URL to set.
+        """
+        self.base_url = base_url
     def infer(self, 
         data: Union[List, pd.DataFrame, pl.DataFrame, str], 
         model: str = "llama-3.1-8b",
@@ -214,7 +225,7 @@ class MaterializedIntelligence:
             response = requests.get(endpoint, headers=headers)
         return response.json()
     
-    def get_job_results(self, job_id: str):
+    def get_job_results(self, job_id: str, include_inputs: bool = False):
         """
         Get the results of a job by its ID.
 
@@ -228,7 +239,8 @@ class MaterializedIntelligence:
         """
         endpoint = f"{self.base_url}/job-results"
         payload = {
-            "job_id": job_id
+            "job_id": job_id,
+            "include_inputs": include_inputs
         }
         headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -240,7 +252,7 @@ class MaterializedIntelligence:
         if response.status_code == 200:
             spinner.succeed("Job results retrieved")
         else:
-            spinner.fail("Failed to retrieve job results")
+            spinner.fail("No data available for the specified job")
         return response.json()['results']
 
     def cancel_job(self, job_id: str):
