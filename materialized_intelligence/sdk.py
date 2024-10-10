@@ -67,12 +67,11 @@ class MaterializedIntelligence:
         data: Union[List, pd.DataFrame, pl.DataFrame, str], 
         model: str = "llama-3.1-8b",
         column: str = None, 
-        output_path: str = None, 
         output_column: str = "inference_result",
         job_priority: int = 0,
         json_schema: str = None,
         num_workers: int = 1,
-        prompt_prefix: str = None,
+        system_prompt: str = None,
         dry_run: bool = False
     ):
         """
@@ -84,13 +83,11 @@ class MaterializedIntelligence:
         Args:
             data (Union[List, pd.DataFrame, pl.DataFrame, str]): The data to run inference on.
             model (str, optional): The model to use for inference. Defaults to "llama-3.1-8b".
-            column (str, optional): The column name to use for inference. Required if data is a DataFrame.
-            output_path (str, optional): The path to save the output to. If not specified, the results will be returned as a list.
-            output_column (str, optional): The column name to store the inference results in. Defaults to "inference_result".
+            column (str, optional): The column name to use for inference. Required if data is a DataFrame or file path.
+            output_column (str, optional): The column name to store the inference results in if input is a DataFrame. Defaults to "inference_result".
             job_priority (int, optional): The priority of the job. Defaults to 0.
             json_schema (str, optional): A JSON schema for the output. Defaults to None.
-            num_workers (int, optional): The number of workers to use for inference. Defaults to 1.
-            prompt_prefix (str, optional): A prefix prompt to add to all inputs. Defaults to None.
+            system_prompt (str, optional): A system prompt to add to all inputs. This allows you to define the behavior of the model. Defaults to None.
             dry_run (bool, optional): If True, the method will return cost estimates instead of running inference. Defaults to False.
 
         Returns:
@@ -122,11 +119,6 @@ class MaterializedIntelligence:
         else:
             raise ValueError("Unsupported data type. Please provide a list, DataFrame, or file path.")
 
-        if prompt_prefix:
-            if prompt_prefix[-1] != ' ':
-                prompt_prefix = prompt_prefix + ' '
-            input_data = [prompt_prefix + input_item for input_item in input_data]
-
         endpoint = f"{self.base_url}/batch-inference"
         headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -138,6 +130,7 @@ class MaterializedIntelligence:
             "job_priority": job_priority,
             "json_schema": json_schema,
             "num_workers": num_workers,
+            "system_prompt": system_prompt,
             "dry_run": dry_run
         }
         if dry_run:
@@ -164,7 +157,8 @@ class MaterializedIntelligence:
                 return job_id
             else:
                 spinner.text_color = "green"
-                spinner.succeed("Materialized results received.")
+                job_id = response_data["metadata"]["job_id"]
+                spinner.succeed(f"Materialized results received. You can re-obtain the results with `mi.get_job_results('{job_id}')`.")
 
                 results = response_data["results"]
 
@@ -174,16 +168,7 @@ class MaterializedIntelligence:
                     elif isinstance(data, pl.DataFrame):
                         data = data.with_columns(pl.Series(output_column, results))
                     return data
-                elif isinstance(data, str) and output_path:
-                    file_ext = os.path.splitext(output_path)[1].lower()
-                    if file_ext == '.csv':
-                        pl.DataFrame({"input": input_data, output_column: results}).write_csv(output_path)
-                    elif file_ext == '.parquet':
-                        pl.DataFrame({"input": input_data, output_column: results}).write_parquet(output_path)
-                    else:
-                        with open(output_path, 'w') as file:
-                            for input_item, result in zip(input_data, results):
-                                file.write(f"{input_item}\t{result}\n")
+                
                 return results
 
     def list_jobs(self):

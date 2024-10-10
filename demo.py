@@ -15,7 +15,7 @@ texts = [
     "Hi, my name is Jane Smith. I am a software engineer at Microsoft.",
 ]
 
-mi.infer(texts, prompt_prefix="Extract out the name of the company from the following title. If there is no company name, return null. Do you not return a specific product if it is not a company name.")
+results = mi.infer(texts, system_prompt="Extract out the name of the company from the following title. If there is no company name, return null. Do you not return a specific product if it is not a company name.")
 
 # json_schema = {
 #     "$schema": "http://json-schema.org/draft-07/schema#",
