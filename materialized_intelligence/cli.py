@@ -89,6 +89,8 @@ def jobs():
     sdk = get_sdk()
     jobs = sdk.list_jobs()
     df = pl.DataFrame(jobs)
+    # TODO: this is a temporary fix to remove jobs where datetime_created is null. We should fix this on the backend.
+    df = df.filter(pl.col("datetime_created").is_not_null())
     df = df.sort(by=["datetime_created"], descending=True)
 
     # TODO: get colors working
@@ -113,7 +115,7 @@ def jobs():
     )
 
     df = df.with_columns(
-        pl.col("job_cost").fill_null(0).map_elements(lambda x: f"${x:.5f}").alias("job_cost")
+        pl.col("job_cost").fill_null(0).map_elements(lambda x: f"${x:.5f}", return_dtype=pl.Utf8).alias("job_cost")
     )
 
     with pl.Config(tbl_rows=-1, tbl_cols=-1, set_fmt_str_lengths=45):
@@ -130,10 +132,11 @@ def status(job_id):
 @cli.command()
 @click.argument("job_id")
 @click.option("--include-inputs", is_flag=True, help="Include the inputs in the results.")
-def results(job_id, include_inputs):
+@click.option("--include-cumulative-logprobs", is_flag=True, help="Include the cumulative logprobs in the results.")
+def job_results(job_id, include_inputs, include_cumulative_logprobs):
     """Get the results of a job."""
     sdk = get_sdk()
-    job_results = sdk.get_job_results(job_id, include_inputs)
+    job_results = sdk.get_job_results(job_id, include_inputs, include_cumulative_logprobs)
     if job_results is not None:
         df = pl.DataFrame(job_results)
         print(df)
