@@ -210,7 +210,7 @@ class MaterializedIntelligence:
             response = requests.get(endpoint, headers=headers)
         return response.json()
     
-    def get_job_results(self, job_id: str, include_inputs: bool = False):
+    def get_job_results(self, job_id: str, include_inputs: bool = False, include_cumulative_logprobs: bool = False):
         """
         Get the results of a job by its ID.
 
@@ -218,6 +218,8 @@ class MaterializedIntelligence:
 
         Args:
             job_id (str): The ID of the job to retrieve the results for.
+            include_inputs (bool, optional): Whether to include the inputs in the results. Defaults to False.
+            include_cumulative_logprobs (bool, optional): Whether to include the cumulative logprobs in the results. Defaults to False.
 
         Returns:
             list: The results of the job.
@@ -225,7 +227,8 @@ class MaterializedIntelligence:
         endpoint = f"{self.base_url}/job-results"
         payload = {
             "job_id": job_id,
-            "include_inputs": include_inputs
+            "include_inputs": include_inputs,
+            "include_cumulative_logprobs": include_cumulative_logprobs
         }
         headers = {
             "Authorization": f"Bearer {self.api_key}",
