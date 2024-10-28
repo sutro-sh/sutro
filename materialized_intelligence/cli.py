@@ -46,8 +46,6 @@ def cli(ctx):
         message = """
 Welcome to the Materialized Intelligence CLI! 
 
-To get started, login with 'mi login'.
-
 To see a list of all available commands, use 'mi --help'.
     """
         click.echo(Fore.GREEN + message + Style.RESET_ALL)
@@ -56,7 +54,7 @@ To see a list of all available commands, use 'mi --help'.
 
 @cli.command()
 def login():
-    """Login to the Materialized Intelligence API."""
+    """Set or update your API key for Materialized Intelligence."""
     config = load_config()
     default_api_key = config.get("api_key", "")
     click.echo("Hint: An API key is already set. Press Enter to keep the existing key." if default_api_key else "")
@@ -84,8 +82,9 @@ def login():
     save_config({"api_key": api_key})
 
 @cli.command()
-def jobs():
-    """List all historical jobs."""
+@click.option("--all", is_flag=True, help="Include all jobs, including cancelled and failed ones.")
+def jobs(all=False):
+    """Lists historical and ongoing jobs. Will only list first 25 jobs by default. Use --all to see all jobs."""
     sdk = get_sdk()
     jobs = sdk.list_jobs()
     df = pl.DataFrame(jobs)
@@ -117,6 +116,9 @@ def jobs():
     df = df.with_columns(
         pl.col("job_cost").fill_null(0).map_elements(lambda x: f"${x:.5f}", return_dtype=pl.Utf8).alias("job_cost")
     )
+
+    if all == False:
+        df = df.slice(0, 25)
 
     with pl.Config(tbl_rows=-1, tbl_cols=-1, set_fmt_str_lengths=45):
         print(df.select(pl.all()))
@@ -160,6 +162,20 @@ def set_base_url(base_url):
     """Set the base URL for the Materialized Intelligence API."""
     set_config_base_url(base_url)
     click.echo(Fore.GREEN + f"Base URL set to {base_url}." + Style.RESET_ALL)
+
+@cli.command()
+def quotas():
+    """Get API quotas."""
+    sdk = get_sdk()
+    quotas = sdk.get_quotas()
+    print(Fore.YELLOW + "Your current quotas are: \n" + Style.RESET_ALL)
+    for priority in range(len(quotas)):
+        quota = quotas[priority]
+        print(f"Job Priority: {priority}")
+        print(f"\tRow Quota (Maximum): {quota['row_quota']}")
+        print(f"\tToken Quota (Maximum): {quota['token_quota']}")
+        print("\n")
+    print(Fore.YELLOW + "To increase your quotas, contact us at team@materialized.dev." + Style.RESET_ALL)
 
 if __name__ == "__main__":
     cli()

@@ -185,7 +185,7 @@ class MaterializedIntelligence:
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json"
         }
-        with Halo(text="Fetching all jobs", spinner="dots", text_color="blue"):
+        with Halo(text="Fetching jobs", spinner="dots", text_color="blue"):
             response = requests.get(endpoint, headers=headers)
         return response.json()['jobs']
 
@@ -199,7 +199,7 @@ class MaterializedIntelligence:
             job_id (str): The ID of the job to retrieve the status for.
 
         Returns:
-            dict: The status of the job.
+            str: The status of the job.
         """
         endpoint = f"{self.base_url}/job-status/{job_id}"
         headers = {
@@ -208,7 +208,7 @@ class MaterializedIntelligence:
         }
         with Halo(text=f"Checking job status with ID: {job_id}", spinner="dots", text_color="blue"):
             response = requests.get(endpoint, headers=headers)
-        return response.json()
+        return response.json()['job_status'][job_id]
     
     def get_job_results(self, job_id: str, include_inputs: bool = False, include_cumulative_logprobs: bool = False):
         """
@@ -294,3 +294,13 @@ class MaterializedIntelligence:
         else:
             spinner.fail()
         return response.json()
+    
+    def get_quotas(self):
+        endpoint = f"{self.base_url}/get-quotas"
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json"
+        }
+        with Halo(text="Fetching quotas", spinner="dots", text_color="blue"):
+            response = requests.get(endpoint, headers=headers)
+        return response.json()['quotas']
