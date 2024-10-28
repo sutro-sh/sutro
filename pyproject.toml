@@ -2,9 +2,14 @@
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+[tool.hatch.env]
+requires = ["pip"]
+type = "virtual"
+installer = "uv"
+
 [project]
 name = "materialized-intelligence"
-version = "0.0.8"
+version = "0.0.9"
 description = "Materialized Intelligence SDK"
 readme = "README.md"
 requires-python = ">=3.10"
