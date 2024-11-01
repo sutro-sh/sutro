@@ -5,6 +5,7 @@ import json
 from typing import Union, List
 import os
 from halo import Halo
+from tqdm.auto import tqdm
 
 class MaterializedIntelligence:
     def __init__(self, api_key: str = None, base_url: str = "https://api.materialized.dev/"):
@@ -72,7 +73,7 @@ class MaterializedIntelligence:
         json_schema: str = None,
         num_workers: int = 1,
         system_prompt: str = None,
-        dry_run: bool = False
+        dry_run: bool = False,
     ):
         """
         Run inference on the provided data.
@@ -131,7 +132,8 @@ class MaterializedIntelligence:
             "json_schema": json_schema,
             "num_workers": num_workers,
             "system_prompt": system_prompt,
-            "dry_run": dry_run
+            "dry_run": dry_run,
+            "interactive": True if job_priority == 0 else False
         }
         if dry_run:
             spinner_text = "Retrieving cost estimates..."
@@ -160,8 +162,35 @@ class MaterializedIntelligence:
                 job_id = response_data["metadata"]["job_id"]
                 spinner.succeed(f"Materialized results received. You can re-obtain the results with `mi.get_job_results('{job_id}')`.")
 
-                results = response_data["results"]
+                total_inputs = len(input_data)
+                # progress_spinner = Halo(text=f"Processing: 0/{total_inputs}", spinner="dots", text_color="yellow")
+                # progress_spinner.start()
 
+                s = requests.Session()
+                payload = {
+                    "expected_total": total_inputs
+                }
+                
+                with self.pretty_progress_bar(total=total_inputs, desc="Processing", color="yellow", style=1) as pbar:
+                    with s.get(f"{self.base_url}/job-progress/{job_id}", 
+                              headers=headers, 
+                              params=payload, 
+                              stream=True) as streaming_response:
+                        streaming_response.raise_for_status()
+                        for chunk in streaming_response.iter_content(chunk_size=1024, decode_unicode=True):
+                            if chunk:
+                                try:
+                                    progress = json.loads(chunk)['completed']
+                                    if progress > pbar.n:  
+                                        pbar.n = progress
+                                        pbar.refresh()
+                                    if progress >= total_inputs:
+                                        break
+                                except json.JSONDecodeError:
+                                    continue
+                
+                results = response_data["results"]
+                
                 if isinstance(data, (pd.DataFrame, pl.DataFrame)):
                     if isinstance(data, pd.DataFrame):
                         data[output_column] = results
@@ -304,3 +333,49 @@ class MaterializedIntelligence:
         with Halo(text="Fetching quotas", spinner="dots", text_color="blue"):
             response = requests.get(endpoint, headers=headers)
         return response.json()['quotas']
+    
+    def pretty_progress_bar(self, total: int, desc: str, color: str = "green", style = 1):
+        """
+        Creates a customized tqdm progress bar with different styling options.
+        
+        Args:
+            total (int): Total iterations
+            desc (str): Description for the progress bar
+            color (str): Color of the progress bar (green, blue, red, yellow, magenta)
+            style (int): Style preset (1-4)
+        """
+        
+        # Style presets
+        style_presets = {
+            1: {
+                "bar_format": "{l_bar}{bar:30}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]",
+                "ascii": "░▒█"
+            },
+            2: {
+                "bar_format": "╢{l_bar}{bar:30}╟ {percentage:3.0f}%",
+                "ascii": "▁▂▃▄▅▆▇█"
+            },
+            3: {
+                "bar_format": "{desc}: |{bar}| {percentage:3.0f}% [{elapsed}<{remaining}]",
+                "ascii": "◯◔◑◕●"
+            },
+            4: {
+                "bar_format": "⏳ {desc} {percentage:3.0f}% |{bar}| {n_fmt}/{total_fmt}",
+                "ascii": "⬜⬛"
+            }
+        }
+        
+        # Get style configuration
+        style_config = style_presets.get(style, style_presets[1])
+        
+        return tqdm(
+            total=total,
+            desc=desc,
+            colour=color,
+            bar_format=style_config["bar_format"],
+            ascii=style_config["ascii"],
+            ncols=80,
+            dynamic_ncols=True,
+            smoothing=0.3,
+            leave=True
+        )
