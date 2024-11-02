@@ -7,7 +7,7 @@ Extract out the name of the company from the following title.
 If there is no company name, return null. Do not return a specific product if it is not a company name.
 """
 
-job_id = mi.infer("demo_data/sample_1000.csv", column="TITLE", system_prompt=system_prompt, model="llama-3.1-8b")
+results = mi.infer("demo_data/sample_1000.csv", column="TITLE", system_prompt=system_prompt, model="llama-3.2-3b")
 
 # poll for job status with a 1 second delay and a 2 hour timeout
 # start_time = time.time()

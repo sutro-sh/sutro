@@ -6,7 +6,8 @@ from typing import Union, List
 import os
 from halo import Halo
 from tqdm.auto import tqdm
-
+import time
+from colorama import Fore, Style
 class MaterializedIntelligence:
     def __init__(self, api_key: str = None, base_url: str = "https://api.materialized.dev/"):
         self.api_key = api_key or self.check_for_api_key()
@@ -138,8 +139,8 @@ class MaterializedIntelligence:
         if dry_run:
             spinner_text = "Retrieving cost estimates..."
         else:   
-            spinner_text = "Materializing results" if job_priority == 0 else f"Creating priority {job_priority} job"
-        spinner = Halo(text=spinner_text, spinner="dots", text_color="blue")
+            spinner_text = "Starting new materialization..."
+        spinner = Halo(text=spinner_text, spinner="dots", text_color="yellow")
         spinner.start()
         response = requests.post(endpoint, data=json.dumps(payload), headers=headers)
         spinner.stop()
@@ -150,7 +151,7 @@ class MaterializedIntelligence:
             return 
         else:
             if dry_run:
-                spinner.succeed("Cost estimates retrieved")
+                spinner.succeed("Cost estimates retrieved 💰")
                 return response_data["results"]
             elif job_priority != 0:
                 job_id = response_data["results"]
@@ -158,39 +159,69 @@ class MaterializedIntelligence:
                 spinner.stop_and_persist(symbol="🛠️ ", text=f"Priority {job_priority} Job created with ID: {job_id}. Use `mi.get_job_status('{job_id}')` to check the status of the job.")
                 return job_id
             else:
-                spinner.text_color = "green"
+                input_length = response_data["metadata"]["input_length"]
+                token_count = response_data["metadata"]["token_count"]
+                model_name = response_data["metadata"]["model"]
                 job_id = response_data["metadata"]["job_id"]
-                spinner.succeed(f"Materialized results received. You can re-obtain the results with `mi.get_job_results('{job_id}')`.")
+
+                spinner.text_color = "green"
+                spinner.succeed(f"Received {input_length} inputs, {token_count} tokens.")
+
+                spinner = Halo(text=f"Job created with ID: {job_id}. Loading model {model_name} and initializing inference...", spinner="dots", text_color="yellow")
+                spinner.start()
 
                 total_inputs = len(input_data)
-                # progress_spinner = Halo(text=f"Processing: 0/{total_inputs}", spinner="dots", text_color="yellow")
-                # progress_spinner.start()
 
                 s = requests.Session()
                 payload = {
+                    "job_id": job_id,
                     "expected_total": total_inputs
                 }
                 
-                with self.pretty_progress_bar(total=total_inputs, desc="Processing", color="yellow", style=1) as pbar:
-                    with s.get(f"{self.base_url}/job-progress/{job_id}", 
-                              headers=headers, 
-                              params=payload, 
-                              stream=True) as streaming_response:
-                        streaming_response.raise_for_status()
-                        for chunk in streaming_response.iter_content(chunk_size=1024, decode_unicode=True):
-                            if chunk:
-                                try:
-                                    progress = json.loads(chunk)['completed']
+                pbar = None
+                results = []
+                with s.post(f"{self.base_url}/job-progress", headers=headers, data=json.dumps(payload), stream=True) as streaming_response:
+                    streaming_response.raise_for_status()
+                    buffer = ""
+                    for chunk in streaming_response.iter_content(chunk_size=1024, decode_unicode=True):
+                        if chunk:
+                            buffer += chunk
+                            try: 
+                                json_data = json.loads(buffer)
+                                buffer = ""
+                            except json.JSONDecodeError:
+                                chunks = buffer.split('}{')
+                                if len(chunks) > 1:
+                                    try:
+                                        buffer = '{' + chunks[-1]
+                                        json_data = json.loads(buffer)
+                                        buffer = ""
+                                    except json.JSONDecodeError:
+                                        continue
+                                else:
+                                    continue
+                            
+                            keys = json_data.keys()
+                            if 'completed' in keys:
+                                progress = json_data['completed']
+                                if progress > 0:
+                                    if pbar is None:
+                                        spinner.text_color = "green"
+                                        spinner.succeed(f"Model {model_name} loaded. Inference on {job_id} in progress...")
+                                        pbar = self.pretty_progress_bar(total=total_inputs, desc="Materialized", color="yellow", style=1)
                                     if progress > pbar.n:  
                                         pbar.n = progress
                                         pbar.refresh()
                                     if progress >= total_inputs:
-                                        break
-                                except json.JSONDecodeError:
-                                    continue
-                
-                results = response_data["results"]
-                
+                                        pbar.colour = "green"
+                                        pbar.close()
+                            if 'results' in keys:
+                                results = json_data['results']
+                                total_output_tokens = json_data.get('total_output_tokens', None)
+                                spinner = Halo(text=f"Job successful! {len(results)} results received; {total_output_tokens} tokens output. You can re-obtain the results with `mi.get_job_results('{job_id}')`", spinner="dots", text_color="green")
+                                spinner.succeed()
+                                break
+                                
                 if isinstance(data, (pd.DataFrame, pl.DataFrame)):
                     if isinstance(data, pd.DataFrame):
                         data[output_column] = results
@@ -348,7 +379,7 @@ class MaterializedIntelligence:
         # Style presets
         style_presets = {
             1: {
-                "bar_format": "{l_bar}{bar:30}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]",
+                "bar_format": "{l_bar}{bar:30}| {n_fmt}/{total_fmt} | {percentage:3.0f}%",
                 "ascii": "░▒█"
             },
             2: {
