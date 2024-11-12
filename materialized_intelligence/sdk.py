@@ -5,6 +5,7 @@ import json
 from typing import Union, List
 import os
 from halo import Halo
+import uuid
 
 class MaterializedIntelligence:
     def __init__(self, api_key: str = None, base_url: str = "https://api.materialized.dev/"):
@@ -52,6 +53,37 @@ class MaterializedIntelligence:
         """
         self.api_key = api_key
 
+    def handle_data_helper(self, data: Union[List, pd.DataFrame, pl.DataFrame, str], column: str = None):
+        if isinstance(data, list):
+            input_data = data
+        elif isinstance(data, (pd.DataFrame, pl.DataFrame)):
+            if column is None:
+                raise ValueError("Column name must be specified for DataFrame input")
+            input_data = data[column].to_list()
+        elif isinstance(data, str):
+            if data.startswith("stage-"):
+                input_data = data
+            else:
+                file_ext = os.path.splitext(data)[1].lower()
+                if file_ext == '.csv':
+                    df = pl.read_csv(data)
+                elif file_ext == '.parquet':
+                    df = pl.read_parquet(data)
+                elif file_ext in ['.txt', '']:
+                    with open(data, 'r') as file:
+                        input_data = [line.strip() for line in file]
+                else:
+                    raise ValueError(f"Unsupported file type: {file_ext}")
+                
+                if file_ext in ['.csv', '.parquet']:
+                    if column is None:
+                        raise ValueError("Column name must be specified for CSV/Parquet input")
+                    input_data = df[column].to_list()
+        else:
+            raise ValueError("Unsupported data type. Please provide a list, DataFrame, or file path.")
+        
+        return input_data
+
     def set_base_url(self, base_url: str):
         """
         Set the base URL for the Materialized Intelligence API.
@@ -78,10 +110,10 @@ class MaterializedIntelligence:
         Run inference on the provided data.
 
         This method allows you to run inference on the provided data using the Materialized Intelligence API.
-        It supports various data types such as lists, pandas DataFrames, polars DataFrames, and file paths.
+        It supports various data types such as lists, pandas DataFrames, polars DataFrames, file paths and stages.
 
         Args:
-            data (Union[List, pd.DataFrame, pl.DataFrame, str]): The data to run inference on.
+            data (Union[List, pd.DataFrame, pl.DataFrame, str]): The data to run inference on. 
             model (str, optional): The model to use for inference. Defaults to "llama-3.1-8b".
             column (str, optional): The column name to use for inference. Required if data is a DataFrame or file path.
             output_column (str, optional): The column name to store the inference results in if input is a DataFrame. Defaults to "inference_result".
@@ -94,30 +126,7 @@ class MaterializedIntelligence:
             Union[List, pd.DataFrame, pl.DataFrame, str]: The results of the inference.
         
         """
-        if isinstance(data, list):
-            input_data = data
-        elif isinstance(data, (pd.DataFrame, pl.DataFrame)):
-            if column is None:
-                raise ValueError("Column name must be specified for DataFrame input")
-            input_data = data[column].to_list()
-        elif isinstance(data, str):
-            file_ext = os.path.splitext(data)[1].lower()
-            if file_ext == '.csv':
-                df = pl.read_csv(data)
-            elif file_ext == '.parquet':
-                df = pl.read_parquet(data)
-            elif file_ext in ['.txt', '']:
-                with open(data, 'r') as file:
-                    input_data = [line.strip() for line in file]
-            else:
-                raise ValueError(f"Unsupported file type: {file_ext}")
-            
-            if file_ext in ['.csv', '.parquet']:
-                if column is None:
-                    raise ValueError("Column name must be specified for CSV/Parquet input")
-                input_data = df[column].to_list()
-        else:
-            raise ValueError("Unsupported data type. Please provide a list, DataFrame, or file path.")
+        input_data = self.handle_data_helper(data, column)
 
         endpoint = f"{self.base_url}/batch-inference"
         headers = {
@@ -269,6 +278,61 @@ class MaterializedIntelligence:
             spinner.fail("Failed to cancel job")
         return response.json()
     
+    def create_stage(self):
+        """
+        Create a new stage.
+
+        This method creates a new stage and returns its ID.
+
+        Returns:
+            str: The ID of the new stage.
+        """
+        endpoint = f"{self.base_url}/create-stage"
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json"
+        }
+        spinner = Halo(text="Creating stage", spinner="dots", text_color="blue")
+        spinner.start()
+        response = requests.get(endpoint, headers=headers)
+        spinner.succeed("Stage created")
+        return response.json()['stage_id']
+
+    def upload_file_to_stage(self, stage_id: str, file_path: str):
+        """
+        Upload data to a stage.
+
+        This method uploads data to a stage. Accepts a stage ID and data in the same formats as the infer method.
+
+        Args:
+            stage_id (str): The ID of the stage to upload to.
+            file_path (str): The path to the file to upload. Should be unique to the stage.
+
+        Returns:
+            dict: The response from the API.
+        """
+        endpoint = f"{self.base_url}/upload-to-stage"
+
+        file_name = os.path.basename(file_path)
+
+        files = {
+            "file": (file_name, open(file_path, "rb"), "application/octet-stream")
+        }
+        
+        payload = {
+            "stage_id": stage_id,
+        }
+        
+        headers = { 
+            "Authorization": f"Bearer {self.api_key}"
+        }
+    
+        spinner = Halo(text=f"Uploading data to stage: {stage_id}", spinner="dots", text_color="blue")
+        spinner.start()
+        response = requests.post(endpoint, headers=headers, data=payload, files=files)
+        spinner.succeed("Data uploaded")
+        return response.json()
+    
     def try_authentication(self, api_key: str):
         """
         Try to authenticate with the API key.
@@ -304,3 +368,4 @@ class MaterializedIntelligence:
         with Halo(text="Fetching quotas", spinner="dots", text_color="blue"):
             response = requests.get(endpoint, headers=headers)
         return response.json()['quotas']
+        
