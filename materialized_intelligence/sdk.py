@@ -62,7 +62,7 @@ class MaterializedIntelligence:
             input_data = data[column].to_list()
         elif isinstance(data, str):
             if data.startswith("stage-"):
-                input_data = data
+                input_data = data + ':' + column
             else:
                 file_ext = os.path.splitext(data)[1].lower()
                 if file_ext == '.csv':
@@ -115,7 +115,7 @@ class MaterializedIntelligence:
         Args:
             data (Union[List, pd.DataFrame, pl.DataFrame, str]): The data to run inference on. 
             model (str, optional): The model to use for inference. Defaults to "llama-3.1-8b".
-            column (str, optional): The column name to use for inference. Required if data is a DataFrame or file path.
+            column (str, optional): The column name to use for inference. Required if data is a DataFrame, file path, or stage.
             output_column (str, optional): The column name to store the inference results in if input is a DataFrame. Defaults to "inference_result".
             job_priority (int, optional): The priority of the job. Defaults to 0.
             json_schema (str, optional): A JSON schema for the output. Defaults to None.
@@ -295,8 +295,12 @@ class MaterializedIntelligence:
         spinner = Halo(text="Creating stage", spinner="dots", text_color="blue")
         spinner.start()
         response = requests.get(endpoint, headers=headers)
-        spinner.succeed("Stage created")
-        return response.json()['stage_id']
+        if response.status_code != 200:
+            spinner.fail(f"Error: {response.json()['message']}")
+            return
+        stage_id = response.json()['stage_id']
+        spinner.succeed(f"Stage created with ID: {stage_id}")
+        return stage_id
 
     def upload_file_to_stage(self, stage_id: str, file_path: str):
         """
@@ -330,7 +334,10 @@ class MaterializedIntelligence:
         spinner = Halo(text=f"Uploading data to stage: {stage_id}", spinner="dots", text_color="blue")
         spinner.start()
         response = requests.post(endpoint, headers=headers, data=payload, files=files)
-        spinner.succeed("Data uploaded")
+        if response.status_code != 200:
+            spinner.fail(f"Error: {response.json()['message']}")
+            return
+        spinner.succeed(f"File {file_name} uploaded to stage: {stage_id}")
         return response.json()
     
     def try_authentication(self, api_key: str):
