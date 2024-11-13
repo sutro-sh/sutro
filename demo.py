@@ -19,25 +19,3 @@ If there is no company name, return null. Do not return a specific product if it
 
 results = mi.infer(stage_id, column="TITLE", system_prompt=system_prompt, model="llama-3.1-8b", job_priority=1)
 os.remove("demo_data/sample_1000.parquet")
-
-
-# poll for job status with a 1 second delay and a 2 hour timeout
-# while True:
-#     status = mi.get_job_status(job_id)['job_status'][job_id]
-#     print(status)
-#     if status == "SUCCEEDED":
-#         results = mi.get_job_results(job_id)
-#         print(results)
-#         break
-#     if status == "FAILED":
-#         raise Exception("Job failed")
-#     time.sleep(10)
-
-# get the results
-# results = mi.get_job_results("job-c7f010c8-6cf1-404b-908a-a826ce023348", include_inputs=True)
-# results = pl.DataFrame(results)
-
-# for row in results.iter_rows(named=True):
-#     print(row['inputs'])
-#     print(row['outputs'])
-#     print()

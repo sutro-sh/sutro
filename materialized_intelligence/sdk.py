@@ -6,6 +6,7 @@ from typing import Union, List
 import os
 from halo import Halo
 import uuid
+import base64
 
 class MaterializedIntelligence:
     def __init__(self, api_key: str = None, base_url: str = "https://api.materialized.dev/"):
@@ -339,6 +340,59 @@ class MaterializedIntelligence:
             return
         spinner.succeed(f"File {file_name} uploaded to stage: {stage_id}")
         return response.json()
+
+    def list_stages(self):
+        endpoint = f"{self.base_url}/list-stages"
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json"
+        }
+        spinner = Halo(text="Retrieving stages", spinner="dots", text_color="blue")
+        spinner.start()
+        response = requests.post(endpoint, headers=headers)
+        if response.status_code != 200:
+            spinner.fail(f"Error: {response.json()['message']}")
+            return
+        spinner.succeed("Stages retrieved")
+        return response.json()['stages']
+
+    def list_files_in_stage(self, stage_id: str):
+        endpoint = f"{self.base_url}/list-files-in-stage"
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json"
+        }
+        payload = {
+            "stage_id": stage_id,
+        }
+        spinner = Halo(text=f"Listing files in stage: {stage_id}", spinner="dots", text_color="blue")
+        spinner.start()
+        response = requests.post(endpoint, headers=headers, data=json.dumps(payload))
+        if response.status_code != 200:
+            spinner.fail(f"Error: {response.json()['message']}")
+            return
+        spinner.succeed(f"Files listed in stage: {stage_id}")
+        return response.json()['files']
+    
+    def retrieve_file_from_stage(self, stage_id: str, file: str):
+        endpoint = f"{self.base_url}/retrieve-file-from-stage"
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json"
+        }
+        payload = {
+            "stage_id": stage_id,
+            "file": file,
+        }
+        spinner = Halo(text=f"Retrieving file from stage: {stage_id}", spinner="dots", text_color="blue")
+        spinner.start()
+        response = requests.post(endpoint, headers=headers, data=json.dumps(payload))
+        if response.status_code != 200:
+            spinner.fail(f"Error: {response.json()['message']}")
+            return
+        file_bytes = base64.b64decode(response.json()['file'])
+        spinner.succeed(f"File {file} retrieved from stage: {stage_id}")
+        return file_bytes
     
     def try_authentication(self, api_key: str):
         """

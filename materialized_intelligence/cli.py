@@ -4,6 +4,10 @@ import os
 import json
 from materialized_intelligence.sdk import MaterializedIntelligence
 import polars as pl
+import warnings
+
+warnings.filterwarnings("ignore", category=pl.PolarsInefficientMapWarning)
+pl.Config.set_tbl_hide_dataframe_shape(True)
 
 CONFIG_DIR = os.path.expanduser("~/.materialized_intelligence")
 CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
@@ -81,9 +85,14 @@ def login():
 
     save_config({"api_key": api_key})
 
-@cli.command()
+@cli.group()
+def jobs():
+    """Manage jobs."""
+    pass
+
+@jobs.command()
 @click.option("--all", is_flag=True, help="Include all jobs, including cancelled and failed ones.")
-def jobs(all=False):
+def list(all=False):
     """Lists historical and ongoing jobs. Will only list first 25 jobs by default. Use --all to see all jobs."""
     sdk = get_sdk()
     jobs = sdk.list_jobs()
@@ -123,7 +132,7 @@ def jobs(all=False):
     with pl.Config(tbl_rows=-1, tbl_cols=-1, set_fmt_str_lengths=45):
         print(df.select(pl.all()))
 
-@cli.command()
+@jobs.command()
 @click.argument("job_id")
 def status(job_id):
     """Get the status of a job."""
@@ -131,7 +140,7 @@ def status(job_id):
     job_status = sdk.get_job_status(job_id)['job_status'][job_id]
     print(job_status)
 
-@cli.command()
+@jobs.command()
 @click.argument("job_id")
 @click.option("--include-inputs", is_flag=True, help="Include the inputs in the results.")
 @click.option("--include-cumulative-logprobs", is_flag=True, help="Include the cumulative logprobs in the results.")
@@ -143,13 +152,56 @@ def job_results(job_id, include_inputs, include_cumulative_logprobs):
         df = pl.DataFrame(job_results)
         print(df)
 
-@cli.command()
+@jobs.command()
 @click.argument("job_id")
 def cancel(job_id):
     """Cancel a running job."""
     sdk = get_sdk()
     sdk.cancel_job(job_id)
     click.echo(Fore.GREEN + "Job cancelled successfully." + Style.RESET_ALL)
+
+
+@cli.group()
+def stages():
+    """Manage stages."""
+    pass
+
+@stages.command()
+def list():
+    """List all stages."""
+    sdk = get_sdk()
+    stages = sdk.list_stages()
+    df = pl.DataFrame(stages)
+
+    df = df.with_columns(pl.col("schema").map_elements(lambda x: str(x), return_dtype=pl.Utf8).alias("schema"))
+    df = df.sort(by=["datetime_added"], descending=True)
+    with pl.Config(tbl_rows=-1, tbl_cols=-1, set_fmt_str_lengths=45):
+        print(df.select(pl.all()))
+
+@stages.command()
+@click.argument("stage_id")
+def files(stage_id):
+    """List all files in a stage."""
+    sdk = get_sdk()
+    files = sdk.list_files_in_stage(stage_id)
+    print(Fore.YELLOW + "Files in stage " + stage_id + ":" + Style.RESET_ALL)
+    for file in files:
+        print(f"\t{file}")
+
+@stages.command()
+@click.argument("stage_id")
+@click.argument("file_name")
+@click.argument("output_path", required=False)
+def retrieve(stage_id, file_name, output_path=None):
+    """Retrieve a file from a stage. If no output path is provided, the file will be saved to the current working directory."""
+    sdk = get_sdk()
+    file = sdk.retrieve_file_from_stage(stage_id, file_name)
+    if output_path is None:
+        with open(file_name, 'wb') as f:
+            f.write(file)
+    else:
+        with open(output_path + "/" + file_name, 'wb') as f:
+            f.write(file)
 
 @cli.command()
 def docs():
