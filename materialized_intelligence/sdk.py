@@ -303,43 +303,60 @@ class MaterializedIntelligence:
         spinner.succeed(f"Stage created with ID: {stage_id}")
         return stage_id
 
-    def upload_file_to_stage(self, stage_id: str, file_path: str):
+    def upload_files_to_stage(self, file_paths: Union[List[str], str], stage_id: str = None):
         """
         Upload data to a stage.
 
         This method uploads data to a stage. Accepts a stage ID and data in the same formats as the infer method.
 
         Args:
-            stage_id (str): The ID of the stage to upload to.
-            file_path (str): The path to the file to upload. Should be unique to the stage.
+            file_paths (Union[List[str], str]): A list of paths to the files to upload, or a single path to a collection of files.
+            stage_id (str): The ID of the stage to upload to. If not provided, a new stage will be created.
 
         Returns:
             dict: The response from the API.
         """
+
+        if stage_id is None:
+            stage_id = self.create_stage()
+
         endpoint = f"{self.base_url}/upload-to-stage"
 
-        file_name = os.path.basename(file_path)
+        if isinstance(file_paths, str):
+            # check if the file path is a directory
+            if os.path.isdir(file_paths):
+                file_paths = [os.path.join(file_paths, f) for f in os.listdir(file_paths)]
+                if len(file_paths) == 0:
+                    raise ValueError("No files found in the directory")
+            else:
+                file_paths = [file_paths]
 
-        files = {
-            "file": (file_name, open(file_path, "rb"), "application/octet-stream")
-        }
-        
-        payload = {
-            "stage_id": stage_id,
-        }
-        
-        headers = { 
-            "Authorization": f"Bearer {self.api_key}"
-        }
-    
-        spinner = Halo(text=f"Uploading data to stage: {stage_id}", spinner="dots", text_color="blue")
+        spinner = Halo(text=f"Uploading files to stage: {stage_id}", spinner="dots", text_color="blue")
         spinner.start()
-        response = requests.post(endpoint, headers=headers, data=payload, files=files)
-        if response.status_code != 200:
-            spinner.fail(f"Error: {response.json()['message']}")
-            return
-        spinner.succeed(f"File {file_name} uploaded to stage: {stage_id}")
-        return response.json()
+        for count, file_path in enumerate(file_paths):
+            file_name = os.path.basename(file_path)
+            
+            files = {
+                "file": (file_name, open(file_path, "rb"), "application/octet-stream")
+            }
+            
+            payload = {
+                "stage_id": stage_id,
+            }
+            
+            headers = { 
+                "Authorization": f"Bearer {self.api_key}"
+            }
+
+            spinner.text = f"Uploading file {count + 1}/{len(file_paths)} to stage: {stage_id}"
+            response = requests.post(endpoint, headers=headers, data=payload, files=files)
+            if response.status_code != 200:
+                spinner.fail(f"Error: {response.json()['message']}")
+                return
+            
+            count += 1
+        spinner.succeed(f"{count} files successfully uploaded to stage: {stage_id}")
+        return stage_id
 
     def list_stages(self):
         endpoint = f"{self.base_url}/list-stages"
@@ -374,25 +391,41 @@ class MaterializedIntelligence:
         spinner.succeed(f"Files listed in stage: {stage_id}")
         return response.json()['files']
     
-    def retrieve_file_from_stage(self, stage_id: str, file: str):
+    def retrieve_files_from_stage(self, stage_id: str, file_names: Union[List[str], str] = None, output_dir: str = None):
         endpoint = f"{self.base_url}/retrieve-file-from-stage"
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json"
-        }
-        payload = {
-            "stage_id": stage_id,
-            "file": file,
-        }
-        spinner = Halo(text=f"Retrieving file from stage: {stage_id}", spinner="dots", text_color="blue")
+
+        if file_names is None:
+            files = self.list_files_in_stage(stage_id)
+        elif isinstance(file_names, str):
+            files = [file_names]
+        else:
+            files = file_names
+
+        # if no output directory is provided, save the files to the current working directory
+        if output_dir is None:
+            output_dir = os.getcwd()
+
+        spinner = Halo(text=f"Retrieving files from stage: {stage_id}", spinner="dots", text_color="blue")
         spinner.start()
-        response = requests.post(endpoint, headers=headers, data=json.dumps(payload))
-        if response.status_code != 200:
-            spinner.fail(f"Error: {response.json()['message']}")
-            return
-        file_bytes = base64.b64decode(response.json()['file'])
-        spinner.succeed(f"File {file} retrieved from stage: {stage_id}")
-        return file_bytes
+        for count, file in enumerate(files):
+            headers = {
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json"
+            }
+            payload = {
+                "stage_id": stage_id,
+                "file": file,
+            }
+            spinner.text = f"Retrieving file {count + 1}/{len(files)} from stage: {stage_id}"
+            response = requests.post(endpoint, headers=headers, data=json.dumps(payload))
+            if response.status_code != 200:
+                spinner.fail(f"Error: {response.json()['message']}")
+                return
+            file_bytes = base64.b64decode(response.json()['file'])
+            with open(os.path.join(output_dir, file), "wb") as f:
+                f.write(file_bytes)
+            count += 1
+        spinner.succeed(f"{count} files successfully retrieved from stage: {stage_id}")
     
     def try_authentication(self, api_key: str):
         """

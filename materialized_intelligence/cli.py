@@ -167,6 +167,13 @@ def stages():
     pass
 
 @stages.command()
+def create():
+    """Create a new stage."""
+    sdk = get_sdk()
+    stage_id = sdk.create_stage()
+    click.echo(Fore.GREEN + f"Stage created successfully. Stage ID: {stage_id}" + Style.RESET_ALL)
+
+@stages.command()
 def list():
     """List all stages."""
     sdk = get_sdk()
@@ -189,19 +196,28 @@ def files(stage_id):
         print(f"\t{file}")
 
 @stages.command()
+@click.argument("file_path")
+@click.argument("stage_id", required=False)
+def upload(file_path, stage_id):
+    """Upload files to a stage. You can provide a single file path or a directory path to upload all files in the directory."""
+    sdk = get_sdk()
+    sdk.upload_files_to_stage(file_path, stage_id)
+
+@stages.command()
 @click.argument("stage_id")
-@click.argument("file_name")
+@click.argument("file_name", required=False)
 @click.argument("output_path", required=False)
-def retrieve(stage_id, file_name, output_path=None):
+def retrieve(stage_id, file_name=None, output_path=None):
     """Retrieve a file from a stage. If no output path is provided, the file will be saved to the current working directory."""
     sdk = get_sdk()
-    file = sdk.retrieve_file_from_stage(stage_id, file_name)
-    if output_path is None:
-        with open(file_name, 'wb') as f:
-            f.write(file)
-    else:
-        with open(output_path + "/" + file_name, 'wb') as f:
-            f.write(file)
+    files = sdk.retrieve_files_from_stage(stage_id, file_name, output_path)
+    for file in files:
+        if output_path is None:
+            with open(file_name, 'wb') as f:
+                f.write(file)
+        else:
+            with open(output_path + "/" + file_name, 'wb') as f:
+                f.write(file)
 
 @cli.command()
 def docs():
