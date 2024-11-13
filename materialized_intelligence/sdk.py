@@ -391,8 +391,8 @@ class MaterializedIntelligence:
         spinner.succeed(f"Files listed in stage: {stage_id}")
         return response.json()['files']
     
-    def retrieve_files_from_stage(self, stage_id: str, file_names: Union[List[str], str] = None, output_dir: str = None):
-        endpoint = f"{self.base_url}/retrieve-file-from-stage"
+    def download_files_from_stage(self, stage_id: str, file_names: Union[List[str], str] = None, output_dir: str = None):
+        endpoint = f"{self.base_url}/download-file-from-stage"
 
         if file_names is None:
             files = self.list_files_in_stage(stage_id)
@@ -405,7 +405,7 @@ class MaterializedIntelligence:
         if output_dir is None:
             output_dir = os.getcwd()
 
-        spinner = Halo(text=f"Retrieving files from stage: {stage_id}", spinner="dots", text_color="blue")
+        spinner = Halo(text=f"Downloading files from stage: {stage_id}", spinner="dots", text_color="blue")
         spinner.start()
         for count, file in enumerate(files):
             headers = {
@@ -416,7 +416,7 @@ class MaterializedIntelligence:
                 "stage_id": stage_id,
                 "file": file,
             }
-            spinner.text = f"Retrieving file {count + 1}/{len(files)} from stage: {stage_id}"
+            spinner.text = f"Downloading file {count + 1}/{len(files)} from stage: {stage_id}"
             response = requests.post(endpoint, headers=headers, data=json.dumps(payload))
             if response.status_code != 200:
                 spinner.fail(f"Error: {response.json()['message']}")
@@ -425,7 +425,7 @@ class MaterializedIntelligence:
             with open(os.path.join(output_dir, file), "wb") as f:
                 f.write(file_bytes)
             count += 1
-        spinner.succeed(f"{count} files successfully retrieved from stage: {stage_id}")
+        spinner.succeed(f"{count} files successfully downloaded from stage: {stage_id}")
     
     def try_authentication(self, api_key: str):
         """

@@ -207,10 +207,10 @@ def upload(file_path, stage_id):
 @click.argument("stage_id")
 @click.argument("file_name", required=False)
 @click.argument("output_path", required=False)
-def retrieve(stage_id, file_name=None, output_path=None):
-    """Retrieve a file from a stage. If no output path is provided, the file will be saved to the current working directory."""
+def download(stage_id, file_name=None, output_path=None):
+    """Download a file from a stage. If no output path is provided, the file will be saved to the current working directory."""
     sdk = get_sdk()
-    files = sdk.retrieve_files_from_stage(stage_id, file_name, output_path)
+    files = sdk.download_files_from_stage(stage_id, file_name, output_path)
     for file in files:
         if output_path is None:
             with open(file_name, 'wb') as f:
