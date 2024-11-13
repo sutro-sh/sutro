@@ -303,19 +303,26 @@ class MaterializedIntelligence:
         spinner.succeed(f"Stage created with ID: {stage_id}")
         return stage_id
 
-    def upload_to_stage(self, file_paths: Union[List[str], str], stage_id: str = None):
+    def upload_to_stage(self, stage_id: Union[List[str], str] = None, file_paths: Union[List[str], str] = None):
         """
         Upload data to a stage.
 
-        This method uploads data to a stage. Accepts a stage ID and data in the same formats as the infer method.
+        This method uploads files to a stage. Accepts a stage ID and file paths. If only a single parameter is provided, it will be interpreted as the file paths.
 
         Args:
-            file_paths (Union[List[str], str]): A list of paths to the files to upload, or a single path to a collection of files.
             stage_id (str): The ID of the stage to upload to. If not provided, a new stage will be created.
+            file_paths (Union[List[str], str]): A list of paths to the files to upload, or a single path to a collection of files.
 
         Returns:
             dict: The response from the API.
         """
+        # when only a single parameter is provided, it is interpreted as the file paths
+        if file_paths is None and stage_id is not None:
+            file_paths = stage_id
+            stage_id = None
+
+        if file_paths is None:
+            raise ValueError("File paths must be provided")
 
         if stage_id is None:
             stage_id = self.create_stage()
@@ -373,8 +380,8 @@ class MaterializedIntelligence:
         spinner.succeed("Stages retrieved")
         return response.json()['stages']
 
-    def list_files_in_stage(self, stage_id: str):
-        endpoint = f"{self.base_url}/list-files-in-stage"
+    def list_stage_files(self, stage_id: str):
+        endpoint = f"{self.base_url}/list-stage-files"
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json"
@@ -412,16 +419,16 @@ class MaterializedIntelligence:
             }
             payload = {
                 "stage_id": stage_id,
-                "file": file,
+                "file_name": file,
             }
             spinner.text = f"Downloading file {count + 1}/{len(files)} from stage: {stage_id}"
             response = requests.post(endpoint, headers=headers, data=json.dumps(payload))
             if response.status_code != 200:
                 spinner.fail(f"Error: {response.json()['message']}")
                 return
-            file_bytes = base64.b64decode(response.json()['file'])
+            file_content = response.content
             with open(os.path.join(output_dir, file), "wb") as f:
-                f.write(file_bytes)
+                f.write(file_content)
             count += 1
         spinner.succeed(f"{count} files successfully downloaded from stage: {stage_id}")
     

@@ -190,7 +190,7 @@ def list():
 def files(stage_id):
     """List all files in a stage."""
     sdk = get_sdk()
-    files = sdk.list_files_in_stage(stage_id)
+    files = sdk.list_stage_files(stage_id)
     print(Fore.YELLOW + "Files in stage " + stage_id + ":" + Style.RESET_ALL)
     for file in files:
         print(f"\t{file}")
