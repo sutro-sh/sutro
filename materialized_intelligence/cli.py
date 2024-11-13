@@ -201,16 +201,16 @@ def files(stage_id):
 def upload(file_path, stage_id):
     """Upload files to a stage. You can provide a single file path or a directory path to upload all files in the directory."""
     sdk = get_sdk()
-    sdk.upload_files_to_stage(file_path, stage_id)
+    sdk.upload_to_stage([file_path], stage_id)
 
 @stages.command()
 @click.argument("stage_id")
 @click.argument("file_name", required=False)
 @click.argument("output_path", required=False)
 def download(stage_id, file_name=None, output_path=None):
-    """Download a file from a stage. If no output path is provided, the file will be saved to the current working directory."""
+    """Download a file/files from a stage. If no files are provided, all files in the stage will be downloaded. If no output path is provided, the file will be saved to the current working directory."""
     sdk = get_sdk()
-    files = sdk.download_files_from_stage(stage_id, file_name, output_path)
+    files = sdk.download_from_stage(stage_id, [file_name], output_path)
     for file in files:
         if output_path is None:
             with open(file_name, 'wb') as f:

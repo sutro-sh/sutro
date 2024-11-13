@@ -303,7 +303,7 @@ class MaterializedIntelligence:
         spinner.succeed(f"Stage created with ID: {stage_id}")
         return stage_id
 
-    def upload_files_to_stage(self, file_paths: Union[List[str], str], stage_id: str = None):
+    def upload_to_stage(self, file_paths: Union[List[str], str], stage_id: str = None):
         """
         Upload data to a stage.
 
@@ -391,15 +391,13 @@ class MaterializedIntelligence:
         spinner.succeed(f"Files listed in stage: {stage_id}")
         return response.json()['files']
     
-    def download_files_from_stage(self, stage_id: str, file_names: Union[List[str], str] = None, output_dir: str = None):
-        endpoint = f"{self.base_url}/download-file-from-stage"
+    def download_from_stage(self, stage_id: str, files: Union[List[str], str] = None, output_dir: str = None):
+        endpoint = f"{self.base_url}/download-from-stage"
 
-        if file_names is None:
+        if files is None:
             files = self.list_files_in_stage(stage_id)
-        elif isinstance(file_names, str):
-            files = [file_names]
-        else:
-            files = file_names
+        elif isinstance(files, str):
+            files = [files]
 
         # if no output directory is provided, save the files to the current working directory
         if output_dir is None:
