@@ -1,32 +1,21 @@
 import materialized_intelligence as mi
 mi.set_base_url("https://staging.api.materialized.dev")
-# import polars as pl
+import polars as pl
+import os
+
+# create a stage
+stage_id = mi.create_stage()
+
+df = pl.read_csv("demo_data/sample_1000.csv")
+df.write_parquet("demo_data/sample_1000.parquet")
+
+# upload a file to the stage
+mi.upload_file_to_stage(stage_id, "demo_data/sample_1000.parquet")
 
 system_prompt = """
 Extract out the name of the company from the following title.
 If there is no company name, return null. Do not return a specific product if it is not a company name.
 """
 
-results = mi.infer("demo_data/sample_1000.csv", column="TITLE", system_prompt=system_prompt, model="llama-3.1-8b", job_priority=1)
-print(results)
-
-# poll for job status with a 1 second delay and a 2 hour timeout
-# while True:
-#     status = mi.get_job_status(job_id)['job_status'][job_id]
-#     print(status)
-#     if status == "SUCCEEDED":
-#         results = mi.get_job_results(job_id)
-#         print(results)
-#         break
-#     if status == "FAILED":
-#         raise Exception("Job failed")
-#     time.sleep(10)
-
-# get the results
-# results = mi.get_job_results("job-c7f010c8-6cf1-404b-908a-a826ce023348", include_inputs=True)
-# results = pl.DataFrame(results)
-
-# for row in results.iter_rows(named=True):
-#     print(row['inputs'])
-#     print(row['outputs'])
-#     print()
+results = mi.infer(stage_id, column="TITLE", system_prompt=system_prompt, model="llama-3.1-8b", job_priority=1)
+os.remove("demo_data/sample_1000.parquet")

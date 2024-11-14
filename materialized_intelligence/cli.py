@@ -4,6 +4,10 @@ import os
 import json
 from materialized_intelligence.sdk import MaterializedIntelligence
 import polars as pl
+import warnings
+
+warnings.filterwarnings("ignore", category=pl.PolarsInefficientMapWarning)
+pl.Config.set_tbl_hide_dataframe_shape(True)
 
 CONFIG_DIR = os.path.expanduser("~/.materialized_intelligence")
 CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
@@ -81,9 +85,14 @@ def login():
 
     save_config({"api_key": api_key})
 
-@cli.command()
+@cli.group()
+def jobs():
+    """Manage jobs."""
+    pass
+
+@jobs.command()
 @click.option("--all", is_flag=True, help="Include all jobs, including cancelled and failed ones.")
-def jobs(all=False):
+def list(all=False):
     """Lists historical and ongoing jobs. Will only list first 25 jobs by default. Use --all to see all jobs."""
     sdk = get_sdk()
     jobs = sdk.list_jobs()
@@ -123,7 +132,7 @@ def jobs(all=False):
     with pl.Config(tbl_rows=-1, tbl_cols=-1, set_fmt_str_lengths=45):
         print(df.select(pl.all()))
 
-@cli.command()
+@jobs.command()
 @click.argument("job_id")
 def status(job_id):
     """Get the status of a job."""
@@ -131,11 +140,11 @@ def status(job_id):
     job_status = sdk.get_job_status(job_id)['job_status'][job_id]
     print(job_status)
 
-@cli.command()
+@jobs.command()
 @click.argument("job_id")
 @click.option("--include-inputs", is_flag=True, help="Include the inputs in the results.")
 @click.option("--include-cumulative-logprobs", is_flag=True, help="Include the cumulative logprobs in the results.")
-def job_results(job_id, include_inputs, include_cumulative_logprobs):
+def results(job_id, include_inputs, include_cumulative_logprobs):
     """Get the results of a job."""
     sdk = get_sdk()
     job_results = sdk.get_job_results(job_id, include_inputs, include_cumulative_logprobs)
@@ -143,13 +152,72 @@ def job_results(job_id, include_inputs, include_cumulative_logprobs):
         df = pl.DataFrame(job_results)
         print(df)
 
-@cli.command()
+@jobs.command()
 @click.argument("job_id")
 def cancel(job_id):
     """Cancel a running job."""
     sdk = get_sdk()
     sdk.cancel_job(job_id)
     click.echo(Fore.GREEN + "Job cancelled successfully." + Style.RESET_ALL)
+
+
+@cli.group()
+def stages():
+    """Manage stages."""
+    pass
+
+@stages.command()
+def create():
+    """Create a new stage."""
+    sdk = get_sdk()
+    stage_id = sdk.create_stage()
+    click.echo(Fore.GREEN + f"Stage created successfully. Stage ID: {stage_id}" + Style.RESET_ALL)
+
+@stages.command()
+def list():
+    """List all stages."""
+    sdk = get_sdk()
+    stages = sdk.list_stages()
+    df = pl.DataFrame(stages)
+
+    df = df.with_columns(pl.col("schema").map_elements(lambda x: str(x), return_dtype=pl.Utf8).alias("schema"))
+    df = df.sort(by=["datetime_added"], descending=True)
+    with pl.Config(tbl_rows=-1, tbl_cols=-1, set_fmt_str_lengths=45):
+        print(df.select(pl.all()))
+
+@stages.command()
+@click.argument("stage_id")
+def files(stage_id):
+    """List all files in a stage."""
+    sdk = get_sdk()
+    files = sdk.list_stage_files(stage_id)
+    print(Fore.YELLOW + "Files in stage " + stage_id + ":" + Style.RESET_ALL)
+    for file in files:
+        print(f"\t{file}")
+
+@stages.command()
+@click.argument("stage_id", required=False)
+@click.argument("file_path")
+def upload(file_path, stage_id):
+    """Upload files to a stage. You can provide a single file path or a directory path to upload all files in the directory."""
+    sdk = get_sdk()
+    sdk.upload_to_stage(file_path, stage_id)
+
+@stages.command()
+@click.argument("stage_id")
+@click.argument("file_name", required=False)
+@click.argument("output_path", required=False)
+def download(stage_id, file_name=None, output_path=None):
+    """Download a file/files from a stage. If no files are provided, all files in the stage will be downloaded. If no output path is provided, the file will be saved to the current working directory."""
+    sdk = get_sdk()
+    files = sdk.download_from_stage(stage_id, [file_name], output_path)
+    for file in files:
+        if output_path is None:
+            with open(file_name, 'wb') as f:
+                f.write(file)
+        else:
+            with open(output_path + "/" + file_name, 'wb') as f:
+                f.write(file)
 
 @cli.command()
 def docs():

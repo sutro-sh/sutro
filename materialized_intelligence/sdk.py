@@ -5,6 +5,8 @@ import json
 from typing import Union, List
 import os
 from halo import Halo
+import uuid
+import base64
 
 class MaterializedIntelligence:
     def __init__(self, api_key: str = None, base_url: str = "https://api.materialized.dev/"):
@@ -52,6 +54,37 @@ class MaterializedIntelligence:
         """
         self.api_key = api_key
 
+    def handle_data_helper(self, data: Union[List, pd.DataFrame, pl.DataFrame, str], column: str = None):
+        if isinstance(data, list):
+            input_data = data
+        elif isinstance(data, (pd.DataFrame, pl.DataFrame)):
+            if column is None:
+                raise ValueError("Column name must be specified for DataFrame input")
+            input_data = data[column].to_list()
+        elif isinstance(data, str):
+            if data.startswith("stage-"):
+                input_data = data + ':' + column
+            else:
+                file_ext = os.path.splitext(data)[1].lower()
+                if file_ext == '.csv':
+                    df = pl.read_csv(data)
+                elif file_ext == '.parquet':
+                    df = pl.read_parquet(data)
+                elif file_ext in ['.txt', '']:
+                    with open(data, 'r') as file:
+                        input_data = [line.strip() for line in file]
+                else:
+                    raise ValueError(f"Unsupported file type: {file_ext}")
+                
+                if file_ext in ['.csv', '.parquet']:
+                    if column is None:
+                        raise ValueError("Column name must be specified for CSV/Parquet input")
+                    input_data = df[column].to_list()
+        else:
+            raise ValueError("Unsupported data type. Please provide a list, DataFrame, or file path.")
+        
+        return input_data
+
     def set_base_url(self, base_url: str):
         """
         Set the base URL for the Materialized Intelligence API.
@@ -78,12 +111,12 @@ class MaterializedIntelligence:
         Run inference on the provided data.
 
         This method allows you to run inference on the provided data using the Materialized Intelligence API.
-        It supports various data types such as lists, pandas DataFrames, polars DataFrames, and file paths.
+        It supports various data types such as lists, pandas DataFrames, polars DataFrames, file paths and stages.
 
         Args:
-            data (Union[List, pd.DataFrame, pl.DataFrame, str]): The data to run inference on.
+            data (Union[List, pd.DataFrame, pl.DataFrame, str]): The data to run inference on. 
             model (str, optional): The model to use for inference. Defaults to "llama-3.1-8b".
-            column (str, optional): The column name to use for inference. Required if data is a DataFrame or file path.
+            column (str, optional): The column name to use for inference. Required if data is a DataFrame, file path, or stage.
             output_column (str, optional): The column name to store the inference results in if input is a DataFrame. Defaults to "inference_result".
             job_priority (int, optional): The priority of the job. Defaults to 0.
             json_schema (str, optional): A JSON schema for the output. Defaults to None.
@@ -94,30 +127,7 @@ class MaterializedIntelligence:
             Union[List, pd.DataFrame, pl.DataFrame, str]: The results of the inference.
         
         """
-        if isinstance(data, list):
-            input_data = data
-        elif isinstance(data, (pd.DataFrame, pl.DataFrame)):
-            if column is None:
-                raise ValueError("Column name must be specified for DataFrame input")
-            input_data = data[column].to_list()
-        elif isinstance(data, str):
-            file_ext = os.path.splitext(data)[1].lower()
-            if file_ext == '.csv':
-                df = pl.read_csv(data)
-            elif file_ext == '.parquet':
-                df = pl.read_parquet(data)
-            elif file_ext in ['.txt', '']:
-                with open(data, 'r') as file:
-                    input_data = [line.strip() for line in file]
-            else:
-                raise ValueError(f"Unsupported file type: {file_ext}")
-            
-            if file_ext in ['.csv', '.parquet']:
-                if column is None:
-                    raise ValueError("Column name must be specified for CSV/Parquet input")
-                input_data = df[column].to_list()
-        else:
-            raise ValueError("Unsupported data type. Please provide a list, DataFrame, or file path.")
+        input_data = self.handle_data_helper(data, column)
 
         endpoint = f"{self.base_url}/batch-inference"
         headers = {
@@ -269,6 +279,159 @@ class MaterializedIntelligence:
             spinner.fail("Failed to cancel job")
         return response.json()
     
+    def create_stage(self):
+        """
+        Create a new stage.
+
+        This method creates a new stage and returns its ID.
+
+        Returns:
+            str: The ID of the new stage.
+        """
+        endpoint = f"{self.base_url}/create-stage"
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json"
+        }
+        spinner = Halo(text="Creating stage", spinner="dots", text_color="blue")
+        spinner.start()
+        response = requests.get(endpoint, headers=headers)
+        if response.status_code != 200:
+            spinner.fail(f"Error: {response.json()['message']}")
+            return
+        stage_id = response.json()['stage_id']
+        spinner.succeed(f"Stage created with ID: {stage_id}")
+        return stage_id
+
+    def upload_to_stage(self, stage_id: Union[List[str], str] = None, file_paths: Union[List[str], str] = None):
+        """
+        Upload data to a stage.
+
+        This method uploads files to a stage. Accepts a stage ID and file paths. If only a single parameter is provided, it will be interpreted as the file paths.
+
+        Args:
+            stage_id (str): The ID of the stage to upload to. If not provided, a new stage will be created.
+            file_paths (Union[List[str], str]): A list of paths to the files to upload, or a single path to a collection of files.
+
+        Returns:
+            dict: The response from the API.
+        """
+        # when only a single parameter is provided, it is interpreted as the file paths
+        if file_paths is None and stage_id is not None:
+            file_paths = stage_id
+            stage_id = None
+
+        if file_paths is None:
+            raise ValueError("File paths must be provided")
+
+        if stage_id is None:
+            stage_id = self.create_stage()
+
+        endpoint = f"{self.base_url}/upload-to-stage"
+
+        if isinstance(file_paths, str):
+            # check if the file path is a directory
+            if os.path.isdir(file_paths):
+                file_paths = [os.path.join(file_paths, f) for f in os.listdir(file_paths)]
+                if len(file_paths) == 0:
+                    raise ValueError("No files found in the directory")
+            else:
+                file_paths = [file_paths]
+
+        spinner = Halo(text=f"Uploading files to stage: {stage_id}", spinner="dots", text_color="blue")
+        spinner.start()
+        for count, file_path in enumerate(file_paths):
+            file_name = os.path.basename(file_path)
+            
+            files = {
+                "file": (file_name, open(file_path, "rb"), "application/octet-stream")
+            }
+            
+            payload = {
+                "stage_id": stage_id,
+            }
+            
+            headers = { 
+                "Authorization": f"Bearer {self.api_key}"
+            }
+
+            spinner.text = f"Uploading file {count + 1}/{len(file_paths)} to stage: {stage_id}"
+            response = requests.post(endpoint, headers=headers, data=payload, files=files)
+            if response.status_code != 200:
+                spinner.fail(f"Error: {response.json()['message']}")
+                return
+            
+            count += 1
+        spinner.succeed(f"{count} files successfully uploaded to stage: {stage_id}")
+        return stage_id
+
+    def list_stages(self):
+        endpoint = f"{self.base_url}/list-stages"
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json"
+        }
+        spinner = Halo(text="Retrieving stages", spinner="dots", text_color="blue")
+        spinner.start()
+        response = requests.post(endpoint, headers=headers)
+        if response.status_code != 200:
+            spinner.fail(f"Error: {response.json()['message']}")
+            return
+        spinner.succeed("Stages retrieved")
+        return response.json()['stages']
+
+    def list_stage_files(self, stage_id: str):
+        endpoint = f"{self.base_url}/list-stage-files"
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json"
+        }
+        payload = {
+            "stage_id": stage_id,
+        }
+        spinner = Halo(text=f"Listing files in stage: {stage_id}", spinner="dots", text_color="blue")
+        spinner.start()
+        response = requests.post(endpoint, headers=headers, data=json.dumps(payload))
+        if response.status_code != 200:
+            spinner.fail(f"Error: {response.json()['message']}")
+            return
+        spinner.succeed(f"Files listed in stage: {stage_id}")
+        return response.json()['files']
+    
+    def download_from_stage(self, stage_id: str, files: Union[List[str], str] = None, output_path: str = None):
+        endpoint = f"{self.base_url}/download-from-stage"
+
+        if files is None:
+            files = self.list_files_in_stage(stage_id)
+        elif isinstance(files, str):
+            files = [files]
+
+        # if no output path is provided, save the files to the current working directory
+        if output_path is None:
+            output_path = os.getcwd()
+
+        spinner = Halo(text=f"Downloading files from stage: {stage_id}", spinner="dots", text_color="blue")
+        spinner.start()
+        for count, file in enumerate(files):
+            headers = {
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json"
+            }
+            payload = {
+                "stage_id": stage_id,
+                "file_name": file,
+            }
+            spinner.text = f"Downloading file {count + 1}/{len(files)} from stage: {stage_id}"
+            response = requests.post(endpoint, headers=headers, data=json.dumps(payload))
+            if response.status_code != 200:
+                spinner.fail(f"Error: {response.json()['message']}")
+                return
+            file_content = response.content
+            with open(os.path.join(output_path, file), "wb") as f:
+                f.write(file_content)
+            count += 1
+        spinner.succeed(f"{count} files successfully downloaded from stage: {stage_id}")
+    
     def try_authentication(self, api_key: str):
         """
         Try to authenticate with the API key.
@@ -304,3 +467,4 @@ class MaterializedIntelligence:
         with Halo(text="Fetching quotas", spinner="dots", text_color="blue"):
             response = requests.get(endpoint, headers=headers)
         return response.json()['quotas']
+        
