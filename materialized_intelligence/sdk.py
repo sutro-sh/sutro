@@ -398,7 +398,7 @@ class MaterializedIntelligence:
         spinner.succeed(f"Files listed in stage: {stage_id}")
         return response.json()['files']
     
-    def download_from_stage(self, stage_id: str, files: Union[List[str], str] = None, output_dir: str = None):
+    def download_from_stage(self, stage_id: str, files: Union[List[str], str] = None, output_path: str = None):
         endpoint = f"{self.base_url}/download-from-stage"
 
         if files is None:
@@ -406,9 +406,9 @@ class MaterializedIntelligence:
         elif isinstance(files, str):
             files = [files]
 
-        # if no output directory is provided, save the files to the current working directory
-        if output_dir is None:
-            output_dir = os.getcwd()
+        # if no output path is provided, save the files to the current working directory
+        if output_path is None:
+            output_path = os.getcwd()
 
         spinner = Halo(text=f"Downloading files from stage: {stage_id}", spinner="dots", text_color="blue")
         spinner.start()
@@ -427,7 +427,7 @@ class MaterializedIntelligence:
                 spinner.fail(f"Error: {response.json()['message']}")
                 return
             file_content = response.content
-            with open(os.path.join(output_dir, file), "wb") as f:
+            with open(os.path.join(output_path, file), "wb") as f:
                 f.write(file_content)
             count += 1
         spinner.succeed(f"{count} files successfully downloaded from stage: {stage_id}")

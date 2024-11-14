@@ -144,7 +144,7 @@ def status(job_id):
 @click.argument("job_id")
 @click.option("--include-inputs", is_flag=True, help="Include the inputs in the results.")
 @click.option("--include-cumulative-logprobs", is_flag=True, help="Include the cumulative logprobs in the results.")
-def job_results(job_id, include_inputs, include_cumulative_logprobs):
+def results(job_id, include_inputs, include_cumulative_logprobs):
     """Get the results of a job."""
     sdk = get_sdk()
     job_results = sdk.get_job_results(job_id, include_inputs, include_cumulative_logprobs)
@@ -196,12 +196,12 @@ def files(stage_id):
         print(f"\t{file}")
 
 @stages.command()
-@click.argument("file_path")
 @click.argument("stage_id", required=False)
+@click.argument("file_path")
 def upload(file_path, stage_id):
     """Upload files to a stage. You can provide a single file path or a directory path to upload all files in the directory."""
     sdk = get_sdk()
-    sdk.upload_to_stage([file_path], stage_id)
+    sdk.upload_to_stage(file_path, stage_id)
 
 @stages.command()
 @click.argument("stage_id")
