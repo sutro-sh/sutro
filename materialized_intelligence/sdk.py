@@ -5,8 +5,6 @@ import json
 from typing import Union, List
 import os
 from halo import Halo
-import uuid
-import base64
 
 class MaterializedIntelligence:
     def __init__(self, api_key: str = None, base_url: str = "https://api.materialized.dev/"):
@@ -402,7 +400,7 @@ class MaterializedIntelligence:
         endpoint = f"{self.base_url}/download-from-stage"
 
         if files is None:
-            files = self.list_files_in_stage(stage_id)
+            files = self.list_stage_files(stage_id)
         elif isinstance(files, str):
             files = [files]
 
