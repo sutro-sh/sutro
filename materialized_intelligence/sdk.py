@@ -4,6 +4,7 @@ import polars as pl
 import json
 from typing import Union, List
 import os
+import sys
 from halo import Halo
 
 class MaterializedIntelligence:
@@ -101,6 +102,7 @@ class MaterializedIntelligence:
         output_column: str = "inference_result",
         job_priority: int = 0,
         json_schema: str = None,
+        sampling_params: dict = None,
         num_workers: int = 1,
         system_prompt: str = None,
         dry_run: bool = False
@@ -139,7 +141,8 @@ class MaterializedIntelligence:
             "json_schema": json_schema,
             "num_workers": num_workers,
             "system_prompt": system_prompt,
-            "dry_run": dry_run
+            "dry_run": dry_run,
+            "sampling_params": sampling_params
         }
         if dry_run:
             spinner_text = "Retrieving cost estimates..."
@@ -171,6 +174,9 @@ class MaterializedIntelligence:
                 results = response_data["results"]
 
                 if isinstance(data, (pd.DataFrame, pl.DataFrame)):
+                    sample_n = 1 if sampling_params is None else sampling_params["n"]
+                    if sample_n > 1:
+                        results = [results[i:i+sample_n] for i in range(0, len(results), sample_n)]
                     if isinstance(data, pd.DataFrame):
                         data[output_column] = results
                     elif isinstance(data, pl.DataFrame):
