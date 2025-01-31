@@ -101,7 +101,7 @@ class MaterializedIntelligence:
         column: str = None, 
         output_column: str = "inference_result",
         job_priority: int = 0,
-        json_schema: dict = None,
+        json_schema: str = None,
         sampling_params: dict = None,
         num_workers: int = 1,
         system_prompt: str = None,
@@ -119,7 +119,7 @@ class MaterializedIntelligence:
             column (str, optional): The column name to use for inference. Required if data is a DataFrame, file path, or stage.
             output_column (str, optional): The column name to store the inference results in if input is a DataFrame. Defaults to "inference_result".
             job_priority (int, optional): The priority of the job. Defaults to 0.
-            json_schema (dict, optional): A JSON schema for the output. Defaults to None.
+            json_schema (str, optional): A JSON schema for the output. Defaults to None.
             system_prompt (str, optional): A system prompt to add to all inputs. This allows you to define the behavior of the model. Defaults to None.
             dry_run (bool, optional): If True, the method will return cost estimates instead of running inference. Defaults to False.
 
@@ -363,7 +363,7 @@ class MaterializedIntelligence:
             response = requests.post(endpoint, headers=headers, data=payload, files=files)
             if response.status_code != 200:
                 spinner.fail(f"Error: {response.json()['message']}")
-                break
+                return
             
             count += 1
         spinner.succeed(f"{count} files successfully uploaded to stage: {stage_id}")

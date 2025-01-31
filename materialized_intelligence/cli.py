@@ -96,9 +96,6 @@ def list(all=False):
     """Lists historical and ongoing jobs. Will only list first 25 jobs by default. Use --all to see all jobs."""
     sdk = get_sdk()
     jobs = sdk.list_jobs()
-    if jobs is None or len(jobs) == 0:
-        click.echo(Fore.YELLOW + "No jobs found." + Style.RESET_ALL)
-        return
     df = pl.DataFrame(jobs)
     # TODO: this is a temporary fix to remove jobs where datetime_created is null. We should fix this on the backend.
     df = df.filter(pl.col("datetime_created").is_not_null())
@@ -140,29 +137,20 @@ def list(all=False):
 def status(job_id):
     """Get the status of a job."""
     sdk = get_sdk()
-    job_status = sdk.get_job_status(job_id)
+    job_status = sdk.get_job_status(job_id)['job_status'][job_id]
     print(job_status)
 
 @jobs.command()
 @click.argument("job_id")
 @click.option("--include-inputs", is_flag=True, help="Include the inputs in the results.")
 @click.option("--include-cumulative-logprobs", is_flag=True, help="Include the cumulative logprobs in the results.")
-@click.option("--save", is_flag=True, help="Download the results to the current working directory. The file name will be the job_id.")
-@click.option("--save-format", type=click.Choice(['parquet', 'csv']), default='parquet', help="The format of the output file. Options: parquet, csv")
-def results(job_id, include_inputs, include_cumulative_logprobs, save=False, save_format='parquet'):
+def results(job_id, include_inputs, include_cumulative_logprobs):
     """Get the results of a job."""
     sdk = get_sdk()
     job_results = sdk.get_job_results(job_id, include_inputs, include_cumulative_logprobs)
     if job_results is not None:
         df = pl.DataFrame(job_results)
-    if save == False:
         print(df)
-    elif save == True:
-        if save_format == 'parquet':
-            df.write_parquet(f"{job_id}.parquet")
-        else:  # csv
-            df.write_csv(f"{job_id}.csv")
-        print(Fore.GREEN + f"Results saved to {job_id}.{save_format}" + Style.RESET_ALL)
 
 @jobs.command()
 @click.argument("job_id")
@@ -190,9 +178,6 @@ def list():
     """List all stages."""
     sdk = get_sdk()
     stages = sdk.list_stages()
-    if stages is None or len(stages) == 0:
-        click.echo(Fore.YELLOW + "No stages found." + Style.RESET_ALL)
-        return
     df = pl.DataFrame(stages)
 
     df = df.with_columns(pl.col("schema").map_elements(lambda x: str(x), return_dtype=pl.Utf8).alias("schema"))
