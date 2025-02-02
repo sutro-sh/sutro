@@ -1,9 +1,9 @@
 import materialized_intelligence as mi
-# mi.set_base_url("https://staging.api.materialized.dev")
 
+mi.set_base_url("https://staging.api.materialized.dev")
 import polars as pl
 
-df = pl.read_csv("demo_data/sample_10000.csv")
+df = pl.read_csv("demo_data/sample_1000.csv")
 
 system_prompt = """
 Extract out the name of the company from the following title.
@@ -13,12 +13,17 @@ If there is no company name, return null. Do not return a specific product if it
 json_schema = {
     "type": "object",
     "properties": {
-        "company_name": {"type": "string"}
+        "company_name": {
+            "type": "string",
+        }
     },
     "required": ["company_name"]
 }
 
-results = mi.infer(df, column="TITLE", system_prompt=system_prompt, model="llama-3.1-8b", job_priority=1)
+
+results = mi.infer(df, column="TITLE", system_prompt=system_prompt, model="llama-3.1-8b", job_priority=0, json_schema=json_schema)
+
+print(results)
 
 # bad data example
 # df = pl.read_parquet("examples/bad_data/example1.snappy.parquet")
