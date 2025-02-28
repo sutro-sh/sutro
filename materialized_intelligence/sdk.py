@@ -505,6 +505,7 @@ class MaterializedIntelligence:
                 spinner.ok()
             else:
                 spinner.fail(f'API key failed to authenticate: {response.status_code}')
+                return
         return response.json()
 
     def get_quotas(self):

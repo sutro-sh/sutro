@@ -64,8 +64,8 @@ def login():
     click.echo("Hint: An API key is already set. Press Enter to keep the existing key." if default_api_key else "")
     api_key = click.prompt("Enter your API key", default=default_api_key, hide_input=True, show_default=False)
 
-    try_authentication = get_sdk().try_authentication(api_key)
-    if 'authenticated' not in try_authentication or try_authentication['authenticated'] != True:
+    result = get_sdk().try_authentication(api_key)
+    if not result or 'authenticated' not in result or result['authenticated'] != True:
         raise click.ClickException(Fore.RED + "Invalid API key. Try again." + Style.RESET_ALL)
     else:
         ascii = """
@@ -141,6 +141,8 @@ def status(job_id):
     """Get the status of a job."""
     sdk = get_sdk()
     job_status = sdk.get_job_status(job_id)
+    if not job_status:
+        return
     print(job_status)
 
 @jobs.command()
@@ -153,11 +155,13 @@ def results(job_id, include_inputs, include_cumulative_logprobs, save=False, sav
     """Get the results of a job."""
     sdk = get_sdk()
     job_results = sdk.get_job_results(job_id, include_inputs, include_cumulative_logprobs)
-    if job_results is not None:
-        df = pl.DataFrame(job_results)
-    if save == False:
+    if not job_results:
+        return
+
+    df = pl.DataFrame(job_results)
+    if not save:
         print(df)
-    elif save == True:
+    elif save:
         if save_format == 'parquet':
             df.write_parquet(f"{job_id}.parquet")
         else:  # csv
@@ -169,7 +173,9 @@ def results(job_id, include_inputs, include_cumulative_logprobs, save=False, sav
 def cancel(job_id):
     """Cancel a running job."""
     sdk = get_sdk()
-    sdk.cancel_job(job_id)
+    result = sdk.cancel_job(job_id)
+    if not result:
+        return
     click.echo(Fore.GREEN + "Job cancelled successfully." + Style.RESET_ALL)
 
 
@@ -183,6 +189,8 @@ def create():
     """Create a new stage."""
     sdk = get_sdk()
     stage_id = sdk.create_stage()
+    if not stage_id:
+        return
     click.echo(Fore.GREEN + f"Stage created successfully. Stage ID: {stage_id}" + Style.RESET_ALL)
 
 @stages.command()
@@ -206,6 +214,8 @@ def files(stage_id):
     """List all files in a stage."""
     sdk = get_sdk()
     files = sdk.list_stage_files(stage_id)
+    if not files:
+        return
     print(Fore.YELLOW + "Files in stage " + stage_id + ":" + Style.RESET_ALL)
     for file in files:
         print(f"\t{file}")
@@ -226,6 +236,8 @@ def download(stage_id, file_name=None, output_path=None):
     """Download a file/files from a stage. If no files are provided, all files in the stage will be downloaded. If no output path is provided, the file will be saved to the current working directory."""
     sdk = get_sdk()
     files = sdk.download_from_stage(stage_id, [file_name], output_path)
+    if not files:
+        return
     for file in files:
         if output_path is None:
             with open(file_name, 'wb') as f:
@@ -251,6 +263,8 @@ def quotas():
     """Get API quotas."""
     sdk = get_sdk()
     quotas = sdk.get_quotas()
+    if not quotas:
+        return
     print(Fore.YELLOW + "Your current quotas are: \n" + Style.RESET_ALL)
     for priority in range(len(quotas)):
         quota = quotas[priority]
