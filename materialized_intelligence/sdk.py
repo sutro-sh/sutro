@@ -170,7 +170,6 @@ class MaterializedIntelligence:
             response_data = response.json()
 
             if response.status_code != 200:
-                message = response_data.get("metadata", "Unknown error")["message"]
                 spinner.fail(f"Error: {response.status_code}")
                 print(response.json())
                 return
@@ -219,6 +218,10 @@ class MaterializedIntelligence:
         }
         with yaspin(text="Fetching jobs", color=YASPIN_COLOR) as spinner:
             response = requests.get(endpoint, headers=headers)
+            if response.status_code != 200:
+                spinner.fail(f"Bad status code: {response.status_code}")
+                print(response.json())
+                return
         return response.json()['jobs']
 
     def get_job_status(self, job_id: str):
@@ -240,6 +243,10 @@ class MaterializedIntelligence:
         }
         with yaspin(text=f"Checking job status with ID: {job_id}", color=YASPIN_COLOR) as spinner:
             response = requests.get(endpoint, headers=headers)
+            if response.status_code != 200:
+                spinner.fail(f"Bad status code: {response.status_code}")
+                print(response.json())
+                return
         return response.json()['job_status'][job_id]
 
     def get_job_results(self, job_id: str, include_inputs: bool = False, include_cumulative_logprobs: bool = False):
@@ -271,7 +278,9 @@ class MaterializedIntelligence:
             if response.status_code == 200:
                 spinner.ok("Job results retrieved")
             else:
-                spinner.fail("No data available for the specified job")
+                spinner.fail(f"Bad status code: {response.status_code}")
+                print(response.json())
+                return
         return response.json()['results']
 
     def cancel_job(self, job_id: str):
@@ -297,6 +306,8 @@ class MaterializedIntelligence:
                 spinner.ok("Job cancelled")
             else:
                 spinner.fail("Failed to cancel job")
+                print(response.json())
+                return
         return response.json()
 
     def create_stage(self):
@@ -381,17 +392,17 @@ class MaterializedIntelligence:
                 count += 1
 
                 try:
-                    # Open file and stream directly as request body
                     response = requests.post(endpoint, headers=headers, data=payload, files=files)
                     if response.status_code != 200:
-                        # Stop spinner before showing error to avoid terminal width issues
+                        # Stop spinner before showing error to avoid terminal width error
                         spinner.stop()
                         print(f"Error: HTTP {response.status_code}")
+                        print(response.json())
                         return
 
                     count += 1
                 except requests.exceptions.RequestException as e:
-                    # Stop spinner before showing error to avoid terminal width issues
+                    # Stop spinner before showing error to avoid terminal width error
                     spinner.stop()
                     print(f"Upload failed: {str(e)}")
                     return
@@ -408,7 +419,8 @@ class MaterializedIntelligence:
         with yaspin(text="Retrieving stages", color=YASPIN_COLOR) as spinner:
             response = requests.post(endpoint, headers=headers)
             if response.status_code != 200:
-                spinner.fail(f"Error:")
+                spinner.fail(f"Bad status code: {response.status_code}")
+                print(f"Error: {response.json()}")
                 return
             spinner.ok("Stages retrieved")
         return response.json()['stages']
@@ -425,7 +437,8 @@ class MaterializedIntelligence:
         with yaspin(text=f"Listing files in stage: {stage_id}", color=YASPIN_COLOR) as spinner:
             response = requests.post(endpoint, headers=headers, data=json.dumps(payload))
             if response.status_code != 200:
-                spinner.fail(f"Error:")
+                spinner.fail(f"Bad status code: {response.status_code}")
+                print(f"Error: {response.json()}")
                 return
             spinner.ok(f"Files listed in stage: {stage_id}")
         return response.json()['files']
@@ -437,6 +450,10 @@ class MaterializedIntelligence:
             files = self.list_stage_files(stage_id)
         elif isinstance(files, str):
             files = [files]
+
+        if not files:
+            print(f"Couldn't find files for stage ID: {stage_id}")
+            return
 
         # if no output path is provided, save the files to the current working directory
         if output_path is None:
@@ -456,7 +473,8 @@ class MaterializedIntelligence:
                 spinner.text = f"Downloading file {count + 1}/{len(files)} from stage: {stage_id}"
                 response = requests.post(endpoint, headers=headers, data=json.dumps(payload))
                 if response.status_code != 200:
-                    spinner.fail(f"Error: ")
+                    spinner.fail(f"Bad status code: {response.status_code}")
+                    print(f"Error: {response.json()}")
                     return
                 file_content = response.content
                 with open(os.path.join(output_path, file), "wb") as f:
@@ -486,7 +504,7 @@ class MaterializedIntelligence:
             if response.status_code == 200:
                 spinner.ok()
             else:
-                spinner.fail()
+                spinner.fail(f'API key failed to authenticate: {response.status_code}')
         return response.json()
 
     def get_quotas(self):
@@ -497,4 +515,8 @@ class MaterializedIntelligence:
         }
         with yaspin(text="Fetching quotas", color=YASPIN_COLOR) as spinner:
             response = requests.get(endpoint, headers=headers)
+            if response.status_code != 200:
+                spinner.fail(f"Bad status code: {response.status_code}")
+                print(f"Error: {response.json()}")
+                return
         return response.json()['quotas']
