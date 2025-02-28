@@ -158,6 +158,13 @@ class MaterializedIntelligence:
         else:
             spinner_text = "Materializing results" if job_priority == 0 else f"Creating priority {job_priority} job"
 
+
+        # There are two gotchas with yaspin:
+        # 1. Can't use print while in spinner is running
+        # 2. When writing to stdout via spinner.fail, spinner.ok etc, there is a pretty strict
+        # limit for content length in jupyter notebooks, where it will give an error about:
+        # Terminal size {self._terminal_width} is too small to display spinner with the given settings.
+        # https://github.com/pavdmyt/yaspin/blob/9c7430b499ab4611888ece39783a870e4a05fa45/yaspin/core.py#L568-L571
         with yaspin(text=spinner_text, color=YASPIN_COLOR) as spinner:
             response = requests.post(endpoint, data=json.dumps(payload), headers=headers)
             response_data = response.json()
