@@ -5,7 +5,32 @@ import json
 from typing import Union, List
 import os
 import sys
-from halo import Halo
+from yaspin import yaspin
+from yaspin.spinners import Spinners
+from colorama import init, Fore, Back, Style
+
+# Initialize colorama (required for Windows)
+init()
+
+# This is how yaspin defines is_jupyter logic
+def is_jupyter() -> bool:
+    return not sys.stdout.isatty()
+
+# `color` param not supported in Jupyter notebooks
+YASPIN_COLOR = None if is_jupyter() else 'blue'
+SPINNER = Spinners.dots14
+
+def to_colored_text(text):
+    """
+    Apply consistent blue coloring to spinner text.
+
+    Args:
+        text (str): The text to color
+
+    Returns:
+        str: Text with blue color applied
+    """
+    return f"{Fore.BLUE}{text}{Style.RESET_ALL}"
 
 class MaterializedIntelligence:
     def __init__(self, api_key: str = None, base_url: str = "https://api.materialized.dev/"):
@@ -37,7 +62,7 @@ class MaterializedIntelligence:
             return config.get("api_key")
         else:
             return None
-        
+
     def set_api_key(self, api_key: str):
         """
         Set the API key for the Materialized Intelligence API.
@@ -74,14 +99,14 @@ class MaterializedIntelligence:
                         input_data = [line.strip() for line in file]
                 else:
                     raise ValueError(f"Unsupported file type: {file_ext}")
-                
+
                 if file_ext in ['.csv', '.parquet']:
                     if column is None:
                         raise ValueError("Column name must be specified for CSV/Parquet input")
                     input_data = df[column].to_list()
         else:
             raise ValueError("Unsupported data type. Please provide a list, DataFrame, or file path.")
-        
+
         return input_data
 
     def set_base_url(self, base_url: str):
@@ -95,18 +120,18 @@ class MaterializedIntelligence:
             base_url (str): The base URL to set.
         """
         self.base_url = base_url
-    def infer(self, 
-        data: Union[List, pd.DataFrame, pl.DataFrame, str], 
-        model: str = "llama-3.1-8b",
-        column: str = None, 
-        output_column: str = "inference_result",
-        job_priority: int = 0,
-        json_schema: dict = None,
-        sampling_params: dict = None,
-        num_workers: int = 1,
-        system_prompt: str = None,
-        dry_run: bool = False
-    ):
+    def infer(self,
+              data: Union[List, pd.DataFrame, pl.DataFrame, str],
+              model: str = "llama-3.1-8b",
+              column: str = None,
+              output_column: str = "inference_result",
+              job_priority: int = 0,
+              json_schema: dict = None,
+              sampling_params: dict = None,
+              num_workers: int = 1,
+              system_prompt: str = None,
+              dry_run: bool = False
+              ):
         """
         Run inference on the provided data.
 
@@ -114,7 +139,7 @@ class MaterializedIntelligence:
         It supports various data types such as lists, pandas DataFrames, polars DataFrames, file paths and stages.
 
         Args:
-            data (Union[List, pd.DataFrame, pl.DataFrame, str]): The data to run inference on. 
+            data (Union[List, pd.DataFrame, pl.DataFrame, str]): The data to run inference on.
             model (str, optional): The model to use for inference. Defaults to "llama-3.1-8b".
             column (str, optional): The column name to use for inference. Required if data is a DataFrame, file path, or stage.
             output_column (str, optional): The column name to store the inference results in if input is a DataFrame. Defaults to "inference_result".
@@ -125,7 +150,7 @@ class MaterializedIntelligence:
 
         Returns:
             Union[List, pd.DataFrame, pl.DataFrame, str]: The results of the inference.
-        
+
         """
         input_data = self.handle_data_helper(data, column)
 
@@ -136,7 +161,7 @@ class MaterializedIntelligence:
         }
         payload = {
             "model": model,
-            "inputs": input_data, 
+            "inputs": input_data,
             "job_priority": job_priority,
             "json_schema": json_schema,
             "num_workers": num_workers,
@@ -145,45 +170,54 @@ class MaterializedIntelligence:
             "sampling_params": sampling_params
         }
         if dry_run:
-            spinner_text = "Retrieving cost estimates..."
-        else:   
-            spinner_text = "Materializing results" if job_priority == 0 else f"Creating priority {job_priority} job"
-        spinner = Halo(text=spinner_text, spinner="dots", text_color="blue")
-        spinner.start()
-        response = requests.post(endpoint, data=json.dumps(payload), headers=headers)
-        spinner.stop()
-        response_data = response.json()
-        if response.status_code != 200:
-            message = response_data.get("metadata", "Unknown error")["message"]
-            spinner.fail(f"Error: {response.status_code} - {message}")
-            return 
+            spinner_text = to_colored_text("Retrieving cost estimates...")
         else:
-            if dry_run:
-                spinner.succeed("Cost estimates retrieved")
-                return response_data["results"]
-            elif job_priority != 0:
-                job_id = response_data["results"]
-                spinner.text_color = "yellow"
-                spinner.stop_and_persist(symbol="🛠️ ", text=f"Priority {job_priority} Job created with ID: {job_id}. Use `mi.get_job_status('{job_id}')` to check the status of the job.")
-                return job_id
+            t = "Materializing results" if job_priority == 0 else f"Creating priority {job_priority} job"
+            spinner_text = to_colored_text(t)
+
+
+        # There are two gotchas with yaspin:
+        # 1. Can't use print while in spinner is running
+        # 2. When writing to stdout via spinner.fail, spinner.write etc, there is a pretty strict
+        # limit for content length in jupyter notebooks, where it will give an error about:
+        # Terminal size {self._terminal_width} is too small to display spinner with the given settings.
+        # https://github.com/pavdmyt/yaspin/blob/9c7430b499ab4611888ece39783a870e4a05fa45/yaspin/core.py#L568-L571
+        with yaspin(SPINNER, text=spinner_text, color=YASPIN_COLOR) as spinner:
+            response = requests.post(endpoint, data=json.dumps(payload), headers=headers)
+            response_data = response.json()
+
+            if response.status_code != 200:
+                spinner.fail(f"Error: {response.status_code}")
+                print(response.json())
+                return
             else:
-                spinner.text_color = "green"
-                job_id = response_data["metadata"]["job_id"]
-                spinner.succeed(f"Materialized results received. You can re-obtain the results with `mi.get_job_results('{job_id}')`.")
+                if dry_run:
+                    spinner.write(to_colored_text("✔ Cost estimates retrieved"))
+                    return response_data["results"]
+                elif job_priority != 0:
+                    job_id = response_data["results"]
+                    spinner.text = to_colored_text(f"Priority {job_priority} Job created with ID: {job_id}")
+                    spinner.write("🛠️")
+                    spinner.write(to_colored_text(f"Use `mi.get_job_status('{job_id}')` to check the status of the job."))
+                    return job_id
+                else:
+                    job_id = response_data["metadata"]["job_id"]
+                    spinner.write(to_colored_text("✔ Materialized results received"))
+                    spinner.write(to_colored_text(f"You can re-obtain the results with `mi.get_job_results('{job_id}')`"))
 
-                results = response_data["results"]
+                    results = response_data["results"]
 
-                if isinstance(data, (pd.DataFrame, pl.DataFrame)):
-                    sample_n = 1 if sampling_params is None else sampling_params["n"]
-                    if sample_n > 1:
-                        results = [results[i:i+sample_n] for i in range(0, len(results), sample_n)]
-                    if isinstance(data, pd.DataFrame):
-                        data[output_column] = results
-                    elif isinstance(data, pl.DataFrame):
-                        data = data.with_columns(pl.Series(output_column, results))
-                    return data
-                
-                return results
+                    if isinstance(data, (pd.DataFrame, pl.DataFrame)):
+                        sample_n = 1 if sampling_params is None else sampling_params["n"]
+                        if sample_n > 1:
+                            results = [results[i:i+sample_n] for i in range(0, len(results), sample_n)]
+                        if isinstance(data, pd.DataFrame):
+                            data[output_column] = results
+                        elif isinstance(data, pl.DataFrame):
+                            data = data.with_columns(pl.Series(output_column, results))
+                        return data
+
+                    return results
 
     def list_jobs(self):
         """
@@ -199,8 +233,13 @@ class MaterializedIntelligence:
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json"
         }
-        with Halo(text="Fetching jobs", spinner="dots", text_color="blue"):
+
+        with yaspin(SPINNER, text=to_colored_text("Fetching jobs"), color=YASPIN_COLOR) as spinner:
             response = requests.get(endpoint, headers=headers)
+            if response.status_code != 200:
+                spinner.fail(f"Bad status code: {response.status_code}")
+                print(response.json())
+                return
         return response.json()['jobs']
 
     def get_job_status(self, job_id: str):
@@ -220,10 +259,15 @@ class MaterializedIntelligence:
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json"
         }
-        with Halo(text=f"Checking job status with ID: {job_id}", spinner="dots", text_color="blue"):
+        with yaspin(SPINNER, text=to_colored_text(f"Checking job status with ID: {job_id}"), color=YASPIN_COLOR) as spinner:
             response = requests.get(endpoint, headers=headers)
+            if response.status_code != 200:
+                spinner.fail(f"Bad status code: {response.status_code}")
+                print(response.json())
+                return
+            spinner.write(to_colored_text("✔ Job status retrieved!"))
         return response.json()['job_status'][job_id]
-    
+
     def get_job_results(self, job_id: str, include_inputs: bool = False, include_cumulative_logprobs: bool = False):
         """
         Get the results of a job by its ID.
@@ -248,13 +292,14 @@ class MaterializedIntelligence:
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json"
         }
-        spinner = Halo(text=f"Gathering results from job: {job_id}", spinner="dots", text_color="blue")
-        spinner.start()
-        response = requests.post(endpoint, data=json.dumps(payload), headers=headers)
-        if response.status_code == 200:
-            spinner.succeed("Job results retrieved")
-        else:
-            spinner.fail("No data available for the specified job")
+        with yaspin(SPINNER, text=to_colored_text(f"Gathering results from job: {job_id}"), color=YASPIN_COLOR) as spinner:
+            response = requests.post(endpoint, data=json.dumps(payload), headers=headers)
+            if response.status_code == 200:
+                spinner.write(to_colored_text("✔ Job results retrieved"))
+            else:
+                spinner.fail(f"Bad status code: {response.status_code}")
+                print(response.json())
+                return
         return response.json()['results']
 
     def cancel_job(self, job_id: str):
@@ -274,15 +319,16 @@ class MaterializedIntelligence:
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json"
         }
-        spinner = Halo(text=f"Cancelling job: {job_id}", spinner="dots", text_color="blue")
-        spinner.start()
-        response = requests.get(endpoint, headers=headers)
-        if response.status_code == 200:
-            spinner.succeed("Job cancelled")
-        else:
-            spinner.fail("Failed to cancel job")
+        with yaspin(SPINNER, text=to_colored_text(f"Cancelling job: {job_id}"), color=YASPIN_COLOR) as spinner:
+            response = requests.get(endpoint, headers=headers)
+            if response.status_code == 200:
+                spinner.write(to_colored_text("✔ Job cancelled"))
+            else:
+                spinner.fail("Failed to cancel job")
+                print(response.json())
+                return
         return response.json()
-    
+
     def create_stage(self):
         """
         Create a new stage.
@@ -297,17 +343,17 @@ class MaterializedIntelligence:
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json"
         }
-        spinner = Halo(text="Creating stage", spinner="dots", text_color="blue")
-        spinner.start()
-        response = requests.get(endpoint, headers=headers)
-        if response.status_code != 200:
-            spinner.fail(f"Error: {response.json()['message']}")
-            return
-        stage_id = response.json()['stage_id']
-        spinner.succeed(f"Stage created with ID: {stage_id}")
+        with yaspin(SPINNER, text=to_colored_text("Creating stage"), color=YASPIN_COLOR) as spinner:
+            response = requests.get(endpoint, headers=headers)
+            if response.status_code != 200:
+                spinner.fail(f"Error")
+                return
+            stage_id = response.json()['stage_id']
+            spinner.write(to_colored_text(f"✔ Stage created with ID: {stage_id}"))
         return stage_id
 
-    def upload_to_stage(self, stage_id: Union[List[str], str] = None, file_paths: Union[List[str], str] = None):
+    def upload_to_stage(self, stage_id: Union[List[str], str] = None, file_paths: Union[List[str], str] = None,
+                        verify_ssl: bool = True):
         """
         Upload data to a stage.
 
@@ -316,6 +362,7 @@ class MaterializedIntelligence:
         Args:
             stage_id (str): The ID of the stage to upload to. If not provided, a new stage will be created.
             file_paths (Union[List[str], str]): A list of paths to the files to upload, or a single path to a collection of files.
+            verify_ssl (bool): Whether to verify SSL certificates. Set to False to bypass SSL verification for troubleshooting.
 
         Returns:
             dict: The response from the API.
@@ -342,31 +389,44 @@ class MaterializedIntelligence:
             else:
                 file_paths = [file_paths]
 
-        spinner = Halo(text=f"Uploading files to stage: {stage_id}", spinner="dots", text_color="blue")
-        spinner.start()
-        for count, file_path in enumerate(file_paths):
-            file_name = os.path.basename(file_path)
-            
-            files = {
-                "file": (file_name, open(file_path, "rb"), "application/octet-stream")
-            }
-            
-            payload = {
-                "stage_id": stage_id,
-            }
-            
-            headers = { 
-                "Authorization": f"Bearer {self.api_key}"
-            }
+        with yaspin(SPINNER, text=to_colored_text(f"Uploading files to stage: {stage_id}"), color=YASPIN_COLOR) as spinner:
+            count = 0
+            for file_path in file_paths:
+                file_name = os.path.basename(file_path)
 
-            spinner.text = f"Uploading file {count + 1}/{len(file_paths)} to stage: {stage_id}"
-            response = requests.post(endpoint, headers=headers, data=payload, files=files)
-            if response.status_code != 200:
-                spinner.fail(f"Error: {response.json()['message']}")
-                break
-            
-            count += 1
-        spinner.succeed(f"{count} files successfully uploaded to stage: {stage_id}")
+                files = {
+                    "file": (file_name, open(file_path, "rb"), "application/octet-stream")
+                }
+
+                payload = {
+                    "stage_id": stage_id,
+                }
+
+                headers = {
+                    "Authorization": f"Bearer {self.api_key}"
+                }
+
+                spinner.write(to_colored_text(f"Uploading file {count + 1}/{len(file_paths)} to stage: {stage_id}"))
+
+                count += 1
+
+                try:
+                    response = requests.post(endpoint, headers=headers, data=payload, files=files)
+                    if response.status_code != 200:
+                        # Stop spinner before showing error to avoid terminal width error
+                        spinner.stop()
+                        print(f"Error: HTTP {response.status_code}")
+                        print(response.json())
+                        return
+
+                    count += 1
+                except requests.exceptions.RequestException as e:
+                    # Stop spinner before showing error to avoid terminal width error
+                    spinner.stop()
+                    print(f"Upload failed: {str(e)}")
+                    return
+
+            spinner.write(to_colored_text(f"✔ {count} files successfully uploaded to stage"))
         return stage_id
 
     def list_stages(self):
@@ -375,13 +435,13 @@ class MaterializedIntelligence:
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json"
         }
-        spinner = Halo(text="Retrieving stages", spinner="dots", text_color="blue")
-        spinner.start()
-        response = requests.post(endpoint, headers=headers)
-        if response.status_code != 200:
-            spinner.fail(f"Error: {response.json()['message']}")
-            return
-        spinner.succeed("Stages retrieved")
+        with yaspin(SPINNER, text=to_colored_text("Retrieving stages"), color=YASPIN_COLOR) as spinner:
+            response = requests.post(endpoint, headers=headers)
+            if response.status_code != 200:
+                spinner.fail(f"Bad status code: {response.status_code}")
+                print(f"Error: {response.json()}")
+                return
+            spinner.write(to_colored_text("✔ Stages retrieved"))
         return response.json()['stages']
 
     def list_stage_files(self, stage_id: str):
@@ -393,15 +453,15 @@ class MaterializedIntelligence:
         payload = {
             "stage_id": stage_id,
         }
-        spinner = Halo(text=f"Listing files in stage: {stage_id}", spinner="dots", text_color="blue")
-        spinner.start()
-        response = requests.post(endpoint, headers=headers, data=json.dumps(payload))
-        if response.status_code != 200:
-            spinner.fail(f"Error: {response.json()['message']}")
-            return
-        spinner.succeed(f"Files listed in stage: {stage_id}")
+        with yaspin(SPINNER, text=to_colored_text(f"Listing files in stage: {stage_id}"), color=YASPIN_COLOR) as spinner:
+            response = requests.post(endpoint, headers=headers, data=json.dumps(payload))
+            if response.status_code != 200:
+                spinner.fail(f"Bad status code: {response.status_code}")
+                print(f"Error: {response.json()}")
+                return
+            spinner.write(to_colored_text(f"✔ Files listed in stage: {stage_id}"))
         return response.json()['files']
-    
+
     def download_from_stage(self, stage_id: str, files: Union[List[str], str] = None, output_path: str = None):
         endpoint = f"{self.base_url}/download-from-stage"
 
@@ -410,32 +470,37 @@ class MaterializedIntelligence:
         elif isinstance(files, str):
             files = [files]
 
+        if not files:
+            print(f"Couldn't find files for stage ID: {stage_id}")
+            return
+
         # if no output path is provided, save the files to the current working directory
         if output_path is None:
             output_path = os.getcwd()
 
-        spinner = Halo(text=f"Downloading files from stage: {stage_id}", spinner="dots", text_color="blue")
-        spinner.start()
-        for count, file in enumerate(files):
-            headers = {
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json"
-            }
-            payload = {
-                "stage_id": stage_id,
-                "file_name": file,
-            }
-            spinner.text = f"Downloading file {count + 1}/{len(files)} from stage: {stage_id}"
-            response = requests.post(endpoint, headers=headers, data=json.dumps(payload))
-            if response.status_code != 200:
-                spinner.fail(f"Error: {response.json()['message']}")
-                return
-            file_content = response.content
-            with open(os.path.join(output_path, file), "wb") as f:
-                f.write(file_content)
-            count += 1
-        spinner.succeed(f"{count} files successfully downloaded from stage: {stage_id}")
-    
+        with yaspin(SPINNER, text=to_colored_text(f"Downloading files from stage: {stage_id}"), color=YASPIN_COLOR) as spinner:
+            count = 0
+            for file in files:
+                headers = {
+                    "Authorization": f"Bearer {self.api_key}",
+                    "Content-Type": "application/json"
+                }
+                payload = {
+                    "stage_id": stage_id,
+                    "file_name": file,
+                }
+                spinner.text = to_colored_text(f"Downloading file {count + 1}/{len(files)} from stage: {stage_id}")
+                response = requests.post(endpoint, headers=headers, data=json.dumps(payload))
+                if response.status_code != 200:
+                    spinner.fail(f"Bad status code: {response.status_code}")
+                    print(f"Error: {response.json()}")
+                    return
+                file_content = response.content
+                with open(os.path.join(output_path, file), "wb") as f:
+                    f.write(file_content)
+                count += 1
+            spinner.write(to_colored_text(f"✔ {count} files successfully downloaded from stage: {stage_id}"))
+
     def try_authentication(self, api_key: str):
         """
         Try to authenticate with the API key.
@@ -453,22 +518,25 @@ class MaterializedIntelligence:
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json"
         }
-        spinner = Halo(text=f"Checking API key.", spinner="dots", text_color="blue")
-        spinner.start()
-        response = requests.get(endpoint, headers=headers)
-        if response.status_code == 200:
-            spinner.succeed()
-        else:
-            spinner.fail()
+        with yaspin(SPINNER, text=to_colored_text("Checking API key"), color=YASPIN_COLOR) as spinner:
+            response = requests.get(endpoint, headers=headers)
+            if response.status_code == 200:
+                spinner.write(to_colored_text("✔"))
+            else:
+                spinner.fail(f'API key failed to authenticate: {response.status_code}')
+                return
         return response.json()
-    
+
     def get_quotas(self):
         endpoint = f"{self.base_url}/get-quotas"
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json"
         }
-        with Halo(text="Fetching quotas", spinner="dots", text_color="blue"):
+        with yaspin(SPINNER, text=to_colored_text("Fetching quotas"), color=YASPIN_COLOR) as spinner:
             response = requests.get(endpoint, headers=headers)
+            if response.status_code != 200:
+                spinner.fail(f"Bad status code: {response.status_code}")
+                print(f"Error: {response.json()}")
+                return
         return response.json()['quotas']
-        
