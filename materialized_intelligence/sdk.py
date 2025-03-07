@@ -129,6 +129,7 @@ class MaterializedIntelligence:
             base_url (str): The base URL to set.
         """
         self.base_url = base_url
+
     def infer(self,
               data: Union[List, pd.DataFrame, pl.DataFrame, str],
               model: str = "llama-3.1-8b",
@@ -188,13 +189,12 @@ class MaterializedIntelligence:
         # There are two gotchas with yaspin:
         # 1. Can't use print while in spinner is running
         # 2. When writing to stdout via spinner.fail, spinner.write etc, there is a pretty strict
-        # limit for content length in jupyter notebooks, where it will give an error about:
+        # limit for content length in jupyter notebooks, where it wisll give an error about:
         # Terminal size {self._terminal_width} is too small to display spinner with the given settings.
         # https://github.com/pavdmyt/yaspin/blob/9c7430b499ab4611888ece39783a870e4a05fa45/yaspin/core.py#L568-L571
         with yaspin(SPINNER, text=spinner_text, color=YASPIN_COLOR) as spinner:
             response = requests.post(endpoint, data=json.dumps(payload), headers=headers)
             response_data = response.json()
-
             if response.status_code != 200:
                 spinner.write(to_colored_text(f"Error: {response.status_code}", state="fail"))
                 spinner.stop()
@@ -206,7 +206,7 @@ class MaterializedIntelligence:
                     return response_data["results"]
                 elif job_priority != 0:
                     job_id = response_data["results"]
-                    spinner.text = to_colored_text(f"Priority {job_priority} Job created with ID: {job_id}")
+                    spinner.write(to_colored_text(f"Priority {job_priority} Job created with ID: {job_id}", state="success"))
                     spinner.write("🛠️")
                     spinner.write(to_colored_text(f"Use `mi.get_job_status('{job_id}')` to check the status of the job."))
                     return job_id
