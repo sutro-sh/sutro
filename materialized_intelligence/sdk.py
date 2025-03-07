@@ -196,8 +196,9 @@ class MaterializedIntelligence:
             response_data = response.json()
 
             if response.status_code != 200:
-                spinner.fail(f"Error: {response.status_code}")
-                print(response.json())
+                spinner.write(to_colored_text(f"Error: {response.status_code}", state="fail"))
+                spinner.stop()
+                print(to_colored_text(response.json(), state="fail"))
                 return
             else:
                 if dry_run:
@@ -246,8 +247,9 @@ class MaterializedIntelligence:
         with yaspin(SPINNER, text=to_colored_text("Fetching jobs"), color=YASPIN_COLOR) as spinner:
             response = requests.get(endpoint, headers=headers)
             if response.status_code != 200:
-                spinner.fail(f"Bad status code: {response.status_code}")
-                print(response.json())
+                spinner.write(to_colored_text(f"Bad status code: {response.status_code}", state="fail"))
+                spinner.stop()
+                print(to_colored_text(response.json(), state="fail"))
                 return
         return response.json()['jobs']
 
@@ -271,8 +273,9 @@ class MaterializedIntelligence:
         with yaspin(SPINNER, text=to_colored_text(f"Checking job status with ID: {job_id}"), color=YASPIN_COLOR) as spinner:
             response = requests.get(endpoint, headers=headers)
             if response.status_code != 200:
-                spinner.fail(f"Bad status code: {response.status_code}")
-                print(response.json())
+                spinner.write(to_colored_text(f"Bad status code: {response.status_code}", state="fail"))
+                spinner.stop()
+                print(to_colored_text(response.json(), state="fail"))
                 return
             spinner.write(to_colored_text("✔ Job status retrieved!", state="success"))
         return response.json()['job_status'][job_id]
@@ -306,8 +309,9 @@ class MaterializedIntelligence:
             if response.status_code == 200:
                 spinner.write(to_colored_text("✔ Job results retrieved", state="success"))
             else:
-                spinner.fail(f"Bad status code: {response.status_code}")
-                print(response.json())
+                spinner.write(to_colored_text(f"Bad status code: {response.status_code}", state="fail"))
+                spinner.stop()
+                print(to_colored_text(response.json(), state="fail"))
                 return
         return response.json()['results']
 
@@ -333,8 +337,9 @@ class MaterializedIntelligence:
             if response.status_code == 200:
                 spinner.write(to_colored_text("✔ Job cancelled", state="success"))
             else:
-                spinner.fail("Failed to cancel job")
-                print(response.json())
+                spinner.write(to_colored_text("Failed to cancel job", state="fail"))
+                spinner.stop()
+                print(to_colored_text(response.json(), state="fail"))
                 return
         return response.json()
 
@@ -355,7 +360,9 @@ class MaterializedIntelligence:
         with yaspin(SPINNER, text=to_colored_text("Creating stage"), color=YASPIN_COLOR) as spinner:
             response = requests.get(endpoint, headers=headers)
             if response.status_code != 200:
-                spinner.fail(f"Error")
+                spinner.write(to_colored_text("Error", state="fail"))
+                spinner.stop()
+                print(to_colored_text(response.json(), state="fail"))
                 return
             stage_id = response.json()['stage_id']
             spinner.write(to_colored_text(f"✔ Stage created with ID: {stage_id}", state="success"))
@@ -424,14 +431,14 @@ class MaterializedIntelligence:
                     if response.status_code != 200:
                         # Stop spinner before showing error to avoid terminal width error
                         spinner.stop()
-                        print(f"Error: HTTP {response.status_code}")
-                        print(response.json())
+                        print(to_colored_text(f"Error: HTTP {response.status_code}", state="fail"))
+                        print(to_colored_text(response.json(), state="fail"))
                         return
 
                 except requests.exceptions.RequestException as e:
                     # Stop spinner before showing error to avoid terminal width error
                     spinner.stop()
-                    print(f"Upload failed: {str(e)}")
+                    print(to_colored_text(f"Upload failed: {str(e)}", state="fail"))
                     return
 
             spinner.write(to_colored_text(f"✔ {count} files successfully uploaded to stage", state="success"))
@@ -446,8 +453,8 @@ class MaterializedIntelligence:
         with yaspin(SPINNER, text=to_colored_text("Retrieving stages"), color=YASPIN_COLOR) as spinner:
             response = requests.post(endpoint, headers=headers)
             if response.status_code != 200:
-                spinner.fail(f"Bad status code: {response.status_code}")
-                print(f"Error: {response.json()}")
+                spinner.fail(to_colored_text(f"Bad status code: {response.status_code}", state="fail"))
+                print(to_colored_text(f"Error: {response.json()}", state="fail"))
                 return
             spinner.write(to_colored_text("✔ Stages retrieved", state="success"))
         return response.json()['stages']
@@ -464,8 +471,8 @@ class MaterializedIntelligence:
         with yaspin(SPINNER, text=to_colored_text(f"Listing files in stage: {stage_id}"), color=YASPIN_COLOR) as spinner:
             response = requests.post(endpoint, headers=headers, data=json.dumps(payload))
             if response.status_code != 200:
-                spinner.fail(f"Bad status code: {response.status_code}")
-                print(f"Error: {response.json()}")
+                spinner.fail(to_colored_text(f"Bad status code: {response.status_code}", state="fail"))
+                print(to_colored_text(f"Error: {response.json()}", state="fail"))
                 return
             spinner.write(to_colored_text(f"✔ Files listed in stage: {stage_id}", state="success"))
         return response.json()['files']
@@ -479,7 +486,7 @@ class MaterializedIntelligence:
             files = [files]
 
         if not files:
-            print(f"Couldn't find files for stage ID: {stage_id}")
+            print(to_colored_text(f"Couldn't find files for stage ID: {stage_id}", state="fail"))
             return
 
         # if no output path is provided, save the files to the current working directory
@@ -500,8 +507,8 @@ class MaterializedIntelligence:
                 spinner.text = to_colored_text(f"Downloading file {count + 1}/{len(files)} from stage: {stage_id}")
                 response = requests.post(endpoint, headers=headers, data=json.dumps(payload))
                 if response.status_code != 200:
-                    spinner.fail(f"Bad status code: {response.status_code}")
-                    print(f"Error: {response.json()}")
+                    spinner.fail(to_colored_text(f"Bad status code: {response.status_code}", state="fail"))
+                    print(to_colored_text(f"Error: {response.json()}", state="fail"))
                     return
                 file_content = response.content
                 with open(os.path.join(output_path, file), "wb") as f:
@@ -531,7 +538,7 @@ class MaterializedIntelligence:
             if response.status_code == 200:
                 spinner.write(to_colored_text("✔"))
             else:
-                spinner.fail(f'API key failed to authenticate: {response.status_code}')
+                spinner.write(to_colored_text(f'API key failed to authenticate: {response.status_code}', state="fail"))
                 return
         return response.json()
 
@@ -544,7 +551,7 @@ class MaterializedIntelligence:
         with yaspin(SPINNER, text=to_colored_text("Fetching quotas"), color=YASPIN_COLOR) as spinner:
             response = requests.get(endpoint, headers=headers)
             if response.status_code != 200:
-                spinner.fail(f"Bad status code: {response.status_code}")
-                print(f"Error: {response.json()}")
+                spinner.fail(to_colored_text(f"Bad status code: {response.status_code}", state="fail"))
+                print(to_colored_text(f"Error: {response.json()}", state="fail"))
                 return
         return response.json()['quotas']
