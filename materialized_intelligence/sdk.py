@@ -2,7 +2,7 @@ import requests
 import pandas as pd
 import polars as pl
 import json
-from typing import Union, List
+from typing import Union, List, Optional, Literal
 import os
 import sys
 from yaspin import yaspin
@@ -20,17 +20,26 @@ def is_jupyter() -> bool:
 YASPIN_COLOR = None if is_jupyter() else 'blue'
 SPINNER = Spinners.dots14
 
-def to_colored_text(text):
+def to_colored_text(text: str, state: Optional[Literal['success', 'fail']] = None) -> str:
     """
-    Apply consistent blue coloring to spinner text.
+    Apply color to text based on state.
 
     Args:
         text (str): The text to color
+        state (Optional[Literal['success', 'fail']]): The state that determines the color.
+            Options: 'success', 'fail', or None (default blue)
 
     Returns:
-        str: Text with blue color applied
+        str: Text with appropriate color applied
     """
-    return f"{Fore.BLUE}{text}{Style.RESET_ALL}"
+    match state:
+        case 'success':
+            return f"{Fore.GREEN}{text}{Style.RESET_ALL}"
+        case 'fail':
+            return f"{Fore.RED}{text}{Style.RESET_ALL}"
+        case _:
+            # Default to blue for normal/processing states
+            return f"{Fore.BLUE}{text}{Style.RESET_ALL}"
 
 class MaterializedIntelligence:
     def __init__(self, api_key: str = None, base_url: str = "https://api.materialized.dev/"):
@@ -192,7 +201,7 @@ class MaterializedIntelligence:
                 return
             else:
                 if dry_run:
-                    spinner.write(to_colored_text("✔ Cost estimates retrieved"))
+                    spinner.write(to_colored_text("✔ Cost estimates retrieved", state="success"))
                     return response_data["results"]
                 elif job_priority != 0:
                     job_id = response_data["results"]
@@ -202,7 +211,7 @@ class MaterializedIntelligence:
                     return job_id
                 else:
                     job_id = response_data["metadata"]["job_id"]
-                    spinner.write(to_colored_text("✔ Materialized results received"))
+                    spinner.write(to_colored_text("✔ Materialized results received", state="success"))
                     spinner.write(to_colored_text(f"You can re-obtain the results with `mi.get_job_results('{job_id}')`"))
 
                     results = response_data["results"]
@@ -265,7 +274,7 @@ class MaterializedIntelligence:
                 spinner.fail(f"Bad status code: {response.status_code}")
                 print(response.json())
                 return
-            spinner.write(to_colored_text("✔ Job status retrieved!"))
+            spinner.write(to_colored_text("✔ Job status retrieved!", state="success"))
         return response.json()['job_status'][job_id]
 
     def get_job_results(self, job_id: str, include_inputs: bool = False, include_cumulative_logprobs: bool = False):
@@ -295,7 +304,7 @@ class MaterializedIntelligence:
         with yaspin(SPINNER, text=to_colored_text(f"Gathering results from job: {job_id}"), color=YASPIN_COLOR) as spinner:
             response = requests.post(endpoint, data=json.dumps(payload), headers=headers)
             if response.status_code == 200:
-                spinner.write(to_colored_text("✔ Job results retrieved"))
+                spinner.write(to_colored_text("✔ Job results retrieved", state="success"))
             else:
                 spinner.fail(f"Bad status code: {response.status_code}")
                 print(response.json())
@@ -322,7 +331,7 @@ class MaterializedIntelligence:
         with yaspin(SPINNER, text=to_colored_text(f"Cancelling job: {job_id}"), color=YASPIN_COLOR) as spinner:
             response = requests.get(endpoint, headers=headers)
             if response.status_code == 200:
-                spinner.write(to_colored_text("✔ Job cancelled"))
+                spinner.write(to_colored_text("✔ Job cancelled", state="success"))
             else:
                 spinner.fail("Failed to cancel job")
                 print(response.json())
@@ -349,7 +358,7 @@ class MaterializedIntelligence:
                 spinner.fail(f"Error")
                 return
             stage_id = response.json()['stage_id']
-            spinner.write(to_colored_text(f"✔ Stage created with ID: {stage_id}"))
+            spinner.write(to_colored_text(f"✔ Stage created with ID: {stage_id}", state="success"))
         return stage_id
 
     def upload_to_stage(self, stage_id: Union[List[str], str] = None, file_paths: Union[List[str], str] = None,
@@ -425,7 +434,7 @@ class MaterializedIntelligence:
                     print(f"Upload failed: {str(e)}")
                     return
 
-            spinner.write(to_colored_text(f"✔ {count} files successfully uploaded to stage"))
+            spinner.write(to_colored_text(f"✔ {count} files successfully uploaded to stage", state="success"))
         return stage_id
 
     def list_stages(self):
@@ -440,7 +449,7 @@ class MaterializedIntelligence:
                 spinner.fail(f"Bad status code: {response.status_code}")
                 print(f"Error: {response.json()}")
                 return
-            spinner.write(to_colored_text("✔ Stages retrieved"))
+            spinner.write(to_colored_text("✔ Stages retrieved", state="success"))
         return response.json()['stages']
 
     def list_stage_files(self, stage_id: str):
@@ -458,7 +467,7 @@ class MaterializedIntelligence:
                 spinner.fail(f"Bad status code: {response.status_code}")
                 print(f"Error: {response.json()}")
                 return
-            spinner.write(to_colored_text(f"✔ Files listed in stage: {stage_id}"))
+            spinner.write(to_colored_text(f"✔ Files listed in stage: {stage_id}", state="success"))
         return response.json()['files']
 
     def download_from_stage(self, stage_id: str, files: Union[List[str], str] = None, output_path: str = None):
@@ -498,7 +507,7 @@ class MaterializedIntelligence:
                 with open(os.path.join(output_path, file), "wb") as f:
                     f.write(file_content)
                 count += 1
-            spinner.write(to_colored_text(f"✔ {count} files successfully downloaded from stage: {stage_id}"))
+            spinner.write(to_colored_text(f"✔ {count} files successfully downloaded from stage: {stage_id}", state="success"))
 
     def try_authentication(self, api_key: str):
         """
