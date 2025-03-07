@@ -406,9 +406,9 @@ class MaterializedIntelligence:
                     "Authorization": f"Bearer {self.api_key}"
                 }
 
-                spinner.write(to_colored_text(f"Uploading file {count + 1}/{len(file_paths)} to stage: {stage_id}"))
-
                 count += 1
+                spinner.write(to_colored_text(f"Uploading file {count}/{len(file_paths)} to stage: {stage_id}"))
+
 
                 try:
                     response = requests.post(endpoint, headers=headers, data=payload, files=files)
@@ -419,7 +419,6 @@ class MaterializedIntelligence:
                         print(response.json())
                         return
 
-                    count += 1
                 except requests.exceptions.RequestException as e:
                     # Stop spinner before showing error to avoid terminal width error
                     spinner.stop()
