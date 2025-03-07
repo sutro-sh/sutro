@@ -360,7 +360,7 @@ class MaterializedIntelligence:
         with yaspin(SPINNER, text=to_colored_text("Creating stage"), color=YASPIN_COLOR) as spinner:
             response = requests.get(endpoint, headers=headers)
             if response.status_code != 200:
-                spinner.write(to_colored_text("Error", state="fail"))
+                spinner.write(to_colored_text(f"Bad status code: {response.status_code}", state="fail"))
                 spinner.stop()
                 print(to_colored_text(response.json(), state="fail"))
                 return
