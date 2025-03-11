@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 import click
 from colorama import Fore, Style
 import os 
@@ -38,6 +39,24 @@ def set_config_base_url(base_url: str):
     config = load_config()
     config["base_url"] = base_url
     save_config(config)
+
+
+def set_human_readable_dates(datetime_columns, df):
+    for col in datetime_columns:
+        if col in df.columns:
+            # Convert UTC string to local time string
+            df = df.with_columns(
+                pl.col(col)
+                .str.to_datetime()
+                .map_elements(
+                    lambda dt: dt.replace(tzinfo=timezone.utc).astimezone().strftime(
+                        "%Y-%m-%d %H:%M:%S %Z") if dt else None,
+                    return_dtype=pl.Utf8
+                )
+                .alias(col)
+            )
+    return df
+
 
 @click.group(invoke_without_command=True)
 @click.pass_context
@@ -99,10 +118,15 @@ def list(all=False):
     if jobs is None or len(jobs) == 0:
         click.echo(Fore.YELLOW + "No jobs found." + Style.RESET_ALL)
         return
+
     df = pl.DataFrame(jobs)
     # TODO: this is a temporary fix to remove jobs where datetime_created is null. We should fix this on the backend.
     df = df.filter(pl.col("datetime_created").is_not_null())
-    df = df.sort(by=["datetime_created"], descending=True)
+    df = df.sort(by=["datetime_created"], descending=False)
+
+    # Format all datetime columns with a more readable format
+    datetime_columns = ["datetime_created", "datetime_added", "datetime_started", "datetime_completed"]
+    df = set_human_readable_dates(datetime_columns, df)
 
     # TODO: get colors working
     # df = df.with_columns([
@@ -135,6 +159,7 @@ def list(all=False):
     with pl.Config(tbl_rows=-1, tbl_cols=-1, set_fmt_str_lengths=45):
         print(df.select(pl.all()))
 
+
 @jobs.command()
 @click.argument("job_id")
 def status(job_id):
@@ -143,6 +168,7 @@ def status(job_id):
     job_status = sdk.get_job_status(job_id)
     if not job_status:
         return
+
     print(job_status)
 
 @jobs.command()
@@ -176,6 +202,7 @@ def cancel(job_id):
     result = sdk.cancel_job(job_id)
     if not result:
         return
+
     click.echo(Fore.GREEN + "Job cancelled successfully." + Style.RESET_ALL)
 
 
@@ -193,6 +220,7 @@ def create():
         return
     click.echo(Fore.GREEN + f"Stage created successfully. Stage ID: {stage_id}" + Style.RESET_ALL)
 
+
 @stages.command()
 def list():
     """List all stages."""
@@ -204,7 +232,12 @@ def list():
     df = pl.DataFrame(stages)
 
     df = df.with_columns(pl.col("schema").map_elements(lambda x: str(x), return_dtype=pl.Utf8).alias("schema"))
-    df = df.sort(by=["datetime_added"], descending=True)
+
+    # Format all datetime columns with a more readable format
+    datetime_columns = ["datetime_added", "updated_at"]
+    df = set_human_readable_dates(datetime_columns, df)
+
+    df = df.sort(by=["datetime_added"], descending=False)
     with pl.Config(tbl_rows=-1, tbl_cols=-1, set_fmt_str_lengths=45):
         print(df.select(pl.all()))
 
@@ -216,6 +249,7 @@ def files(stage_id):
     files = sdk.list_stage_files(stage_id)
     if not files:
         return
+
     print(Fore.YELLOW + "Files in stage " + stage_id + ":" + Style.RESET_ALL)
     for file in files:
         print(f"\t{file}")
