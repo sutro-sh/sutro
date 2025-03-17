@@ -208,7 +208,7 @@ class MaterializedIntelligence:
                     return response_data["results"]
                 else:
                     job_id = response_data["results"]
-                    spinner.write(to_colored_text(f"🛠️ Priority {job_priority} Job created with ID: {job_id}", state="success"))
+                    spinner.write(to_colored_text(f"🛠️  Priority {job_priority} Job created with ID: {job_id}", state="success"))
                     if not stay_attached:
                         spinner.write(to_colored_text(f"Use `mi.get_job_status('{job_id}')` to check the status of the job."))
                         return job_id
@@ -218,28 +218,32 @@ class MaterializedIntelligence:
             payload = {
                 "job_id": job_id,
             }
-            # pbar = None
+            pbar = None
             with s.post(f"{self.base_url}/stream-job-progress", data=json.dumps(payload), headers=headers, stream=True) as streaming_response:
                 streaming_response.raise_for_status()
+                spinner = yaspin(SPINNER, text=to_colored_text("Awaiting results..."), color=YASPIN_COLOR)
+                spinner.start()
                 for line in streaming_response.iter_lines():
                     if line:
                         try:
                             json_obj = json.loads(line)
-                            print(json_obj, flush=True)
-                            # if json_obj['update_type'] == 'progress':
-                                # if pbar is None:
-                                    # pbar = tqdm(total=len(input_data), desc="Progress")
-                                # if json_obj['result'] > pbar.n:
-                                    # pbar.update(json_obj['result'] - pbar.n)
-                                    # pbar.refresh()
-                                # if json_obj['result'] == len(input_data):
-                                    # pbar.close()
-                            print('\n', flush=True)
+                            if json_obj['update_type'] == 'progress':
+                                if pbar is None:
+                                    spinner.stop()
+                                    postfix = f"Input tokens processed: 0"
+                                    pbar = self.fancy_tqdm(total=len(input_data), desc="Progress", style=1, postfix=postfix)
+                                if json_obj['result'] > pbar.n:
+                                    pbar.update(json_obj['result'] - pbar.n)
+                                    pbar.refresh()
+                                if json_obj['result'] == len(input_data):
+                                    pbar.close()
+                            elif json_obj['update_type'] == 'tokens':
+                                if pbar is not None:
+                                    pbar.postfix = f"Input tokens processed: {json_obj['result']['input_tokens']}, Tokens generated: {json_obj['result']['output_tokens']}, Total tokens/s: {json_obj['result']['total_tokens_processed_per_second']}"
+                                    pbar.refresh()
                         except json.JSONDecodeError:
-                            print(line, flush=True)
-                            print('\n', flush=True)
+                            print("Error: ", line, flush=True)
                         
-                # else:
                 # else:
                 #     job_id = response_data["metadata"]["job_id"]
                 #     spinner.write(to_colored_text("✔ Materialized results received", state="success"))
@@ -258,6 +262,58 @@ class MaterializedIntelligence:
                 #         return data
 
                 #     return results
+
+    def fancy_tqdm(self, total: int, desc: str = "Progress", color: str = "blue", style = 1, postfix: str = None):
+        """
+        Creates a customized tqdm progress bar with different styling options.
+        
+        Args:
+            total (int): Total iterations
+            desc (str): Description for the progress bar
+            color (str): Color of the progress bar (green, blue, red, yellow, magenta)
+            style (int): Style preset (1-4)
+            postfix (str): Postfix for the progress bar
+        """
+
+        # Style presets
+        style_presets = {
+            1: {
+                "bar_format": "{l_bar}{bar:30}| {n_fmt}/{total_fmt} | {percentage:3.0f}% {postfix}",
+                "ascii": "░▒█"
+            },
+            2: {
+                "bar_format": "╢{l_bar}{bar:30}╟ {percentage:3.0f}%",
+                "ascii": "▁▂▃▄▅▆▇█"
+            },
+            3: {
+                "bar_format": "{desc}: |{bar}| {percentage:3.0f}% [{elapsed}<{remaining}]",
+                "ascii": "◯◔◑◕●"
+            },
+            4: {
+                "bar_format": "⏳ {desc} {percentage:3.0f}% |{bar}| {n_fmt}/{total_fmt}",
+                "ascii": "⬜⬛"
+            },
+            5: {
+                "bar_format": "⏳ {desc} {percentage:3.0f}% |{bar}| {n_fmt}/{total_fmt}",
+                "ascii": "▏▎▍▌▋▊▉█"
+            }
+        }
+
+        # Get style configuration
+        style_config = style_presets.get(style, style_presets[1])
+
+        return tqdm(
+            total=total,
+            desc=desc,
+            colour=color,
+            bar_format=style_config["bar_format"],
+            ascii=style_config["ascii"],
+            ncols=80,
+            dynamic_ncols=True,
+            smoothing=0.3,
+            leave=True,
+            postfix=postfix
+        )
 
     def list_jobs(self):
         """
