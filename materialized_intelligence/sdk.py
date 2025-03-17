@@ -8,7 +8,7 @@ import sys
 from yaspin import yaspin
 from yaspin.spinners import Spinners
 from colorama import init, Fore, Back, Style
-
+from tqdm import tqdm
 # Initialize colorama (required for Windows)
 init()
 
@@ -140,7 +140,8 @@ class MaterializedIntelligence:
               sampling_params: dict = None,
               num_workers: int = 1,
               system_prompt: str = None,
-              dry_run: bool = False
+              dry_run: bool = False,
+              stay_attached: bool = False
               ):
         """
         Run inference on the provided data.
@@ -157,12 +158,14 @@ class MaterializedIntelligence:
             json_schema (dict, optional): A JSON schema for the output. Defaults to None.
             system_prompt (str, optional): A system prompt to add to all inputs. This allows you to define the behavior of the model. Defaults to None.
             dry_run (bool, optional): If True, the method will return cost estimates instead of running inference. Defaults to False.
+            stay_attached (bool, optional): If True, the method will stay attached to the job until it is complete. Defaults to True for prototyping jobs, False otherwise.
 
         Returns:
             Union[List, pd.DataFrame, pl.DataFrame, str]: The results of the inference.
 
         """
         input_data = self.handle_data_helper(data, column)
+        stay_attached = stay_attached or job_priority == 0
 
         endpoint = f"{self.base_url}/batch-inference"
         headers = {
@@ -174,7 +177,6 @@ class MaterializedIntelligence:
             "inputs": input_data,
             "job_priority": job_priority,
             "json_schema": json_schema,
-            "num_workers": num_workers,
             "system_prompt": system_prompt,
             "dry_run": dry_run,
             "sampling_params": sampling_params
@@ -182,9 +184,8 @@ class MaterializedIntelligence:
         if dry_run:
             spinner_text = to_colored_text("Retrieving cost estimates...")
         else:
-            t = "Materializing results" if job_priority == 0 else f"Creating priority {job_priority} job"
+            t = f"Creating priority {job_priority} job"
             spinner_text = to_colored_text(t)
-
 
         # There are two gotchas with yaspin:
         # 1. Can't use print while in spinner is running
@@ -192,6 +193,7 @@ class MaterializedIntelligence:
         # limit for content length in jupyter notebooks, where it wisll give an error about:
         # Terminal size {self._terminal_width} is too small to display spinner with the given settings.
         # https://github.com/pavdmyt/yaspin/blob/9c7430b499ab4611888ece39783a870e4a05fa45/yaspin/core.py#L568-L571
+        job_id = None
         with yaspin(SPINNER, text=spinner_text, color=YASPIN_COLOR) as spinner:
             response = requests.post(endpoint, data=json.dumps(payload), headers=headers)
             response_data = response.json()
@@ -204,30 +206,58 @@ class MaterializedIntelligence:
                 if dry_run:
                     spinner.write(to_colored_text("✔ Cost estimates retrieved", state="success"))
                     return response_data["results"]
-                elif job_priority != 0:
-                    job_id = response_data["results"]
-                    spinner.write(to_colored_text(f"Priority {job_priority} Job created with ID: {job_id}", state="success"))
-                    spinner.write("🛠️")
-                    spinner.write(to_colored_text(f"Use `mi.get_job_status('{job_id}')` to check the status of the job."))
-                    return job_id
                 else:
-                    job_id = response_data["metadata"]["job_id"]
-                    spinner.write(to_colored_text("✔ Materialized results received", state="success"))
-                    spinner.write(to_colored_text(f"You can re-obtain the results with `mi.get_job_results('{job_id}')`"))
+                    job_id = response_data["results"]
+                    spinner.write(to_colored_text(f"🛠️ Priority {job_priority} Job created with ID: {job_id}", state="success"))
+                    if not stay_attached:
+                        spinner.write(to_colored_text(f"Use `mi.get_job_status('{job_id}')` to check the status of the job."))
+                        return job_id
+                    
+        if stay_attached and job_id is not None:
+            s = requests.Session()
+            payload = {
+                "job_id": job_id,
+            }
+            # pbar = None
+            with s.post(f"{self.base_url}/stream-job-progress", data=json.dumps(payload), headers=headers, stream=True) as streaming_response:
+                streaming_response.raise_for_status()
+                for line in streaming_response.iter_lines():
+                    if line:
+                        try:
+                            json_obj = json.loads(line)
+                            print(json_obj, flush=True)
+                            # if json_obj['update_type'] == 'progress':
+                                # if pbar is None:
+                                    # pbar = tqdm(total=len(input_data), desc="Progress")
+                                # if json_obj['result'] > pbar.n:
+                                    # pbar.update(json_obj['result'] - pbar.n)
+                                    # pbar.refresh()
+                                # if json_obj['result'] == len(input_data):
+                                    # pbar.close()
+                            print('\n', flush=True)
+                        except json.JSONDecodeError:
+                            print(line, flush=True)
+                            print('\n', flush=True)
+                        
+                # else:
+                # else:
+                #     job_id = response_data["metadata"]["job_id"]
+                #     spinner.write(to_colored_text("✔ Materialized results received", state="success"))
+                #     spinner.write(to_colored_text(f"You can re-obtain the results with `mi.get_job_results('{job_id}')`"))
 
-                    results = response_data["results"]
+                #     results = response_data["results"]
 
-                    if isinstance(data, (pd.DataFrame, pl.DataFrame)):
-                        sample_n = 1 if sampling_params is None else sampling_params["n"]
-                        if sample_n > 1:
-                            results = [results[i:i+sample_n] for i in range(0, len(results), sample_n)]
-                        if isinstance(data, pd.DataFrame):
-                            data[output_column] = results
-                        elif isinstance(data, pl.DataFrame):
-                            data = data.with_columns(pl.Series(output_column, results))
-                        return data
+                #     if isinstance(data, (pd.DataFrame, pl.DataFrame)):
+                #         sample_n = 1 if sampling_params is None else sampling_params["n"]
+                #         if sample_n > 1:
+                #             results = [results[i:i+sample_n] for i in range(0, len(results), sample_n)]
+                #         if isinstance(data, pd.DataFrame):
+                #             data[output_column] = results
+                #         elif isinstance(data, pl.DataFrame):
+                #             data = data.with_columns(pl.Series(output_column, results))
+                #         return data
 
-                    return results
+                #     return results
 
     def list_jobs(self):
         """
