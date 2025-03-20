@@ -17,10 +17,17 @@ json_schema = {
             "type": "string",
         }
     },
-    "required": ["company_name"]
+    "required": ["company_name"],
 }
 
-results = mi.infer(df, column="TITLE", system_prompt=system_prompt, model="llama-3.1-8b", job_priority=0, stay_attached=True)
+results = mi.infer(
+    df,
+    column="TITLE",
+    system_prompt=system_prompt,
+    model="llama-3.1-8b",
+    job_priority=0,
+    stay_attached=True,
+)
 
 # jobs = mi.list_jobs()
 # for job in jobs:
