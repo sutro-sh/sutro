@@ -9,6 +9,9 @@ from yaspin import yaspin
 from yaspin.spinners import Spinners
 from colorama import init, Fore, Back, Style
 from tqdm import tqdm
+import time
+
+
 # Initialize colorama (required for Windows)
 init()
 
@@ -159,7 +162,7 @@ class MaterializedIntelligence:
             system_prompt (str, optional): A system prompt to add to all inputs. This allows you to define the behavior of the model. Defaults to None.
             dry_run (bool, optional): If True, the method will return cost estimates instead of running inference. Defaults to False.
             stay_attached (bool, optional): If True, the method will stay attached to the job until it is complete. Defaults to True for prototyping jobs, False otherwise.
-
+            
         Returns:
             Union[List, pd.DataFrame, pl.DataFrame, str]: The results of the inference.
 
@@ -212,16 +215,17 @@ class MaterializedIntelligence:
                     if not stay_attached:
                         spinner.write(to_colored_text(f"Use `mi.get_job_status('{job_id}')` to check the status of the job."))
                         return job_id
-                    
+        
+        success = False
         if stay_attached and job_id is not None:
             s = requests.Session()
             payload = {
                 "job_id": job_id,
             }
             pbar = None
-            with s.post(f"{self.base_url}/stream-job-progress", data=json.dumps(payload), headers=headers, stream=True) as streaming_response:
+            with s.get(f"{self.base_url}/stream-job-progress/{job_id}", headers=headers, stream=True) as streaming_response:
                 streaming_response.raise_for_status()
-                spinner = yaspin(SPINNER, text=to_colored_text("Awaiting results..."), color=YASPIN_COLOR)
+                spinner = yaspin(SPINNER, text=to_colored_text("Awaiting status updates..."), color=YASPIN_COLOR)
                 spinner.start()
                 for line in streaming_response.iter_lines():
                     if line:
@@ -237,31 +241,56 @@ class MaterializedIntelligence:
                                     pbar.refresh()
                                 if json_obj['result'] == len(input_data):
                                     pbar.close()
+                                    success = True
                             elif json_obj['update_type'] == 'tokens':
                                 if pbar is not None:
                                     pbar.postfix = f"Input tokens processed: {json_obj['result']['input_tokens']}, Tokens generated: {json_obj['result']['output_tokens']}, Total tokens/s: {json_obj['result']['total_tokens_processed_per_second']}"
                                     pbar.refresh()
                         except json.JSONDecodeError:
                             print("Error: ", line, flush=True)
+
                         
-                # else:
-                #     job_id = response_data["metadata"]["job_id"]
-                #     spinner.write(to_colored_text("✔ Materialized results received", state="success"))
-                #     spinner.write(to_colored_text(f"You can re-obtain the results with `mi.get_job_results('{job_id}')`"))
+            if success:
+                spinner.text = to_colored_text("✔ Job succeeded. Obtaining results...", state="success")
+                spinner.start()
 
-                #     results = response_data["results"]
+                payload = {
+                    "job_id": job_id,
+                }
 
-                #     if isinstance(data, (pd.DataFrame, pl.DataFrame)):
-                #         sample_n = 1 if sampling_params is None else sampling_params["n"]
-                #         if sample_n > 1:
-                #             results = [results[i:i+sample_n] for i in range(0, len(results), sample_n)]
-                #         if isinstance(data, pd.DataFrame):
-                #             data[output_column] = results
-                #         elif isinstance(data, pl.DataFrame):
-                #             data = data.with_columns(pl.Series(output_column, results))
-                #         return data
+                max_retries = 3
+                retry_delay = 1  # initial delay in seconds
+                
+                for _ in range(max_retries):
+                    time.sleep(retry_delay)
+                    
+                    job_results_response = s.post(f"{self.base_url}/job-results", headers=headers, data=json.dumps(payload))
+                    if job_results_response.status_code == 200:
+                        break
+                        
+                    retry_delay *= 2  # exponential backoff
+                
+                if job_results_response.status_code != 200:
+                    spinner.write(to_colored_text("Failed to obtain job results. Please check the job status with `mi.get_job_status('{job_id}')`", state="fail"))
+                    spinner.stop()
+                    return
+                
+                results = job_results_response.json()["results"]
+                
+                spinner.write(to_colored_text(f"✔ Job results received. You can re-obtain the results with `mi.get_job_results('{job_id}')`", state="success"))
+                spinner.stop()
 
-                #     return results
+                if isinstance(data, (pd.DataFrame, pl.DataFrame)):
+                    sample_n = 1 if sampling_params is None else sampling_params["n"]
+                    if sample_n > 1:
+                        results = [results[i:i+sample_n] for i in range(0, len(results), sample_n)]
+                    if isinstance(data, pd.DataFrame):
+                        data[output_column] = results
+                    elif isinstance(data, pl.DataFrame):
+                        data = data.with_columns(pl.Series(output_column, results))
+                    return data
+
+                return results
 
     def fancy_tqdm(self, total: int, desc: str = "Progress", color: str = "blue", style = 1, postfix: str = None):
         """
@@ -641,3 +670,5 @@ class MaterializedIntelligence:
                 print(to_colored_text(f"Error: {response.json()}", state="fail"))
                 return
         return response.json()['quotas']
+        
+    

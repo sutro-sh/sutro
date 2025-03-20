@@ -122,7 +122,7 @@ def list(all=False):
     df = pl.DataFrame(jobs)
     # TODO: this is a temporary fix to remove jobs where datetime_created is null. We should fix this on the backend.
     df = df.filter(pl.col("datetime_created").is_not_null())
-    df = df.sort(by=["datetime_created"], descending=False)
+    df = df.sort(by=["datetime_created"], descending=True)
 
     # Format all datetime columns with a more readable format
     datetime_columns = ["datetime_created", "datetime_added", "datetime_started", "datetime_completed"]
@@ -237,7 +237,7 @@ def list():
     datetime_columns = ["datetime_added", "updated_at"]
     df = set_human_readable_dates(datetime_columns, df)
 
-    df = df.sort(by=["datetime_added"], descending=False)
+    df = df.sort(by=["datetime_added"], descending=True)
     with pl.Config(tbl_rows=-1, tbl_cols=-1, set_fmt_str_lengths=45):
         print(df.select(pl.all()))
 
