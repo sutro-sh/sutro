@@ -7,6 +7,7 @@ import json
 import os
 
 import pandas as pd
+
 # Add these imports from your MaterializedIntelligence class
 from colorama import Fore, Style
 
@@ -28,14 +29,14 @@ class TestMaterializedIntelligence(unittest.TestCase):
         # Reset stdout
         sys.stdout = self.old_stdout
 
-    @patch('requests.post')
+    @patch("requests.post")
     def test_infer_success(self, mock_post):
         # Mock successful response
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.json.return_value = {
             "results": ["result1", "result2"],
-            "metadata": {"job_id": "test_job_id"}
+            "metadata": {"job_id": "test_job_id"},
         }
         mock_post.return_value = mock_response
 
@@ -51,9 +52,12 @@ class TestMaterializedIntelligence(unittest.TestCase):
         # Check output for success message
         output = self.stdout_capture.getvalue()
         self.assertIn("✔ Materialized results received", output)
-        self.assertIn(f"You can re-obtain the results with `mi.get_job_results('test_job_id')`", output)
+        self.assertIn(
+            f"You can re-obtain the results with `mi.get_job_results('test_job_id')`",
+            output,
+        )
 
-    @patch('requests.post')
+    @patch("requests.post")
     def test_infer_failure(self, mock_post):
         # Mock failed response
         mock_response = MagicMock()
@@ -70,9 +74,11 @@ class TestMaterializedIntelligence(unittest.TestCase):
         # Check output for error message
         output = self.stdout_capture.getvalue()
         self.assertIn(f"Error: 400", output)
-        self.assertTrue("{'error': 'Bad request'}" in output or '{"error": "Bad request"}' in output)
+        self.assertTrue(
+            "{'error': 'Bad request'}" in output or '{"error": "Bad request"}' in output
+        )
 
-    @patch('requests.get')
+    @patch("requests.get")
     def test_list_jobs_success(self, mock_get):
         # Mock successful response
         mock_response = MagicMock()
@@ -86,7 +92,7 @@ class TestMaterializedIntelligence(unittest.TestCase):
         # Verify results
         self.assertEqual(result, ["job1", "job2"])
 
-    @patch('requests.get')
+    @patch("requests.get")
     def test_list_jobs_failure(self, mock_get):
         # Mock failed response
         mock_response = MagicMock()
@@ -104,7 +110,7 @@ class TestMaterializedIntelligence(unittest.TestCase):
         output = self.stdout_capture.getvalue()
         self.assertIn(f"Bad status code: 401", output)
 
-    @patch('requests.get')
+    @patch("requests.get")
     def test_get_job_status_success(self, mock_get):
         # Mock successful response
         mock_response = MagicMock()
@@ -122,7 +128,7 @@ class TestMaterializedIntelligence(unittest.TestCase):
         output = self.stdout_capture.getvalue()
         self.assertIn("✔ Job status retrieved!", output)
 
-    @patch('requests.post')
+    @patch("requests.post")
     def test_get_job_results_success(self, mock_post):
         # Mock successful response
         mock_response = MagicMock()
@@ -140,7 +146,7 @@ class TestMaterializedIntelligence(unittest.TestCase):
         output = self.stdout_capture.getvalue()
         self.assertIn("✔ Job results retrieved", output)
 
-    @patch('requests.get')
+    @patch("requests.get")
     def test_cancel_job_success(self, mock_get):
         # Mock successful response
         mock_response = MagicMock()
@@ -158,7 +164,7 @@ class TestMaterializedIntelligence(unittest.TestCase):
         output = self.stdout_capture.getvalue()
         self.assertIn("✔ Job cancelled", output)
 
-    @patch('requests.get')
+    @patch("requests.get")
     def test_create_stage_success(self, mock_get):
         # Mock successful response
         mock_response = MagicMock()
@@ -176,14 +182,21 @@ class TestMaterializedIntelligence(unittest.TestCase):
         output = self.stdout_capture.getvalue()
         self.assertIn("✔ Stage created with ID: test_stage_id", output)
 
-    @patch('requests.post')
-    @patch('os.path.isdir')
-    @patch('os.listdir')
-    @patch('os.path.basename')
-    @patch('builtins.open')
-    @patch('materialized_intelligence.MaterializedIntelligence.create_stage')
-    def test_upload_to_stage_success(self, mock_create_stage, mock_open, mock_basename,
-                                     mock_listdir, mock_isdir, mock_post):
+    @patch("requests.post")
+    @patch("os.path.isdir")
+    @patch("os.listdir")
+    @patch("os.path.basename")
+    @patch("builtins.open")
+    @patch("materialized_intelligence.MaterializedIntelligence.create_stage")
+    def test_upload_to_stage_success(
+        self,
+        mock_create_stage,
+        mock_open,
+        mock_basename,
+        mock_listdir,
+        mock_isdir,
+        mock_post,
+    ):
         # Mock necessary functions
         mock_create_stage.return_value = "new_stage_id"
         mock_isdir.return_value = False
@@ -205,7 +218,7 @@ class TestMaterializedIntelligence(unittest.TestCase):
         output = self.stdout_capture.getvalue()
         self.assertIn("✔ 1 files successfully uploaded to stage", output)
 
-    @patch('requests.post')
+    @patch("requests.post")
     def test_list_stages_success(self, mock_post):
         # Mock successful response
         mock_response = MagicMock()
@@ -261,7 +274,7 @@ class TestUserExperience(unittest.TestCase):
         sys.stdout = self.stdout_capture
         return output
 
-    @patch('requests.post')
+    @patch("requests.post")
     def test_progress_indicators_during_inference(self, mock_post):
         """Test that the user sees appropriate progress indicators during inference"""
 
@@ -272,7 +285,7 @@ class TestUserExperience(unittest.TestCase):
             mock_response.status_code = 200
             mock_response.json.return_value = {
                 "results": ["result1", "result2"],
-                "metadata": {"job_id": "test_job_id"}
+                "metadata": {"job_id": "test_job_id"},
             }
             return mock_response
 
@@ -287,7 +300,7 @@ class TestUserExperience(unittest.TestCase):
         self.assertIn("✔ Materialized results received", output)
         self.assertIn("You can re-obtain the results with", output)
 
-    @patch('requests.post')
+    @patch("requests.post")
     def test_helpful_error_messages(self, mock_post):
         """Test that error messages are helpful and user-friendly"""
         # Mock failed response with a typical API error
@@ -295,7 +308,7 @@ class TestUserExperience(unittest.TestCase):
         mock_response.status_code = 400
         mock_response.json.return_value = {
             "error": "Invalid inputs",
-            "details": "Input data format is not supported"
+            "details": "Input data format is not supported",
         }
         mock_post.return_value = mock_response
 
@@ -307,9 +320,9 @@ class TestUserExperience(unittest.TestCase):
         self.assertIn("Error: 400", output)
         # Verify the full error details are shown to the user
         self.assertTrue("Invalid inputs" in output)
-        self.assertTrue("Input data format is not supported" in output or
-                        "details" in output)
-
+        self.assertTrue(
+            "Input data format is not supported" in output or "details" in output
+        )
 
     def test_input_validation_feedback(self):
         """Test that users get clear feedback for invalid inputs"""
@@ -321,12 +334,14 @@ class TestUserExperience(unittest.TestCase):
 
         self.assertIn("Column name must be specified", str(context.exception))
 
-    @patch('requests.post')
-    @patch.object(MaterializedIntelligence, 'create_stage')
-    @patch('os.path.isdir')
-    @patch('os.listdir')
-    @patch('builtins.open', new_callable=mock_open, read_data="test data")
-    def test_multi_file_upload_progress(self, mock_file, mock_listdir, mock_isdir, mock_create_stage, mock_post):
+    @patch("requests.post")
+    @patch.object(MaterializedIntelligence, "create_stage")
+    @patch("os.path.isdir")
+    @patch("os.listdir")
+    @patch("builtins.open", new_callable=mock_open, read_data="test data")
+    def test_multi_file_upload_progress(
+        self, mock_file, mock_listdir, mock_isdir, mock_create_stage, mock_post
+    ):
         """Test that users see progress during multi-file uploads"""
         # Setup for multiple files
         mock_isdir.return_value = True
@@ -348,15 +363,13 @@ class TestUserExperience(unittest.TestCase):
         self.assertIn("Uploading file 3/3", output)
         self.assertIn("✔ 3 files successfully uploaded", output)
 
-    @patch('requests.post')
+    @patch("requests.post")
     def test_priority_job_feedback(self, mock_post):
         """Test feedback for priority jobs"""
         # Mock response for priority job
         mock_response = MagicMock()
         mock_response.status_code = 200
-        mock_response.json.return_value = {
-            "results": "priority_job_123"
-        }
+        mock_response.json.return_value = {"results": "priority_job_123"}
         mock_post.return_value = mock_response
 
         # Call with priority
@@ -365,9 +378,11 @@ class TestUserExperience(unittest.TestCase):
         # Check output contains helpful next steps
         output = self.get_captured_output()
         self.assertIn("Priority 5 Job created with ID", output)
-        self.assertIn("Use `mi.get_job_status('priority_job_123')` to check the status", output)
+        self.assertIn(
+            "Use `mi.get_job_status('priority_job_123')` to check the status", output
+        )
 
-    @patch('requests.post')
+    @patch("requests.post")
     def test_dry_run_feedback(self, mock_post):
         """Test the user feedback for dry run cost estimates"""
         # Mock response for dry run
@@ -387,7 +402,7 @@ class TestUserExperience(unittest.TestCase):
         self.assertIn("✔ Cost estimates retrieved", output)
         self.assertEqual(result, {"total_tokens": 1000, "estimated_cost": "$0.05"})
 
-    @patch('requests.get')
+    @patch("requests.get")
     def test_retryable_error_guidance(self, mock_get):
         """Test guidance provided for retryable errors like rate limits"""
         # Mock a rate limit response
@@ -395,7 +410,7 @@ class TestUserExperience(unittest.TestCase):
         mock_response.status_code = 429
         mock_response.json.return_value = {
             "error": "Rate limit exceeded",
-            "retry_after": 5
+            "retry_after": 5,
         }
         mock_get.return_value = mock_response
 
@@ -406,15 +421,18 @@ class TestUserExperience(unittest.TestCase):
         output = self.get_captured_output()
         self.assertIn("Rate limit exceeded", output)
 
-    @patch('requests.post')
+    @patch("requests.post")
     def test_schema_validation_feedback(self, mock_post):
         """Test feedback when using JSON schema validation"""
         # Set up a schema
         schema = {
             "type": "object",
             "properties": {
-                "sentiment": {"type": "string", "enum": ["positive", "negative", "neutral"]}
-            }
+                "sentiment": {
+                    "type": "string",
+                    "enum": ["positive", "negative", "neutral"],
+                }
+            },
         }
 
         # Mock response with validation error
@@ -422,7 +440,7 @@ class TestUserExperience(unittest.TestCase):
         mock_response.status_code = 400
         mock_response.json.return_value = {
             "error": "Schema validation failed",
-            "details": "Response didn't match schema: Expected 'sentiment' to be one of ['positive', 'negative', 'neutral']"
+            "details": "Response didn't match schema: Expected 'sentiment' to be one of ['positive', 'negative', 'neutral']",
         }
         mock_post.return_value = mock_response
 
@@ -433,20 +451,18 @@ class TestUserExperience(unittest.TestCase):
         output = self.get_captured_output()
         self.assertIn("Schema validation failed", output)
 
-    @patch('requests.post')
+    @patch("requests.post")
     def test_dataframe_result_feedback(self, mock_post):
         """Test feedback when returning results into a dataframe"""
         # Create a test dataframe
-        df = pd.DataFrame({
-            "text": ["sample 1", "sample 2", "sample 3"]
-        })
+        df = pd.DataFrame({"text": ["sample 1", "sample 2", "sample 3"]})
 
         # Mock successful response
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.json.return_value = {
             "results": ["result1", "result2", "result3"],
-            "metadata": {"job_id": "test_job_id"}
+            "metadata": {"job_id": "test_job_id"},
         }
         mock_post.return_value = mock_response
 
@@ -457,7 +473,9 @@ class TestUserExperience(unittest.TestCase):
         output = self.get_captured_output()
         self.assertIn("✔ Materialized results received", output)
         self.assertTrue("inference_result" in result_df.columns)
-        self.assertEqual(list(result_df["inference_result"]), ["result1", "result2", "result3"])
+        self.assertEqual(
+            list(result_df["inference_result"]), ["result1", "result2", "result3"]
+        )
 
 
 class TestColorFormatting(unittest.TestCase):
@@ -485,7 +503,7 @@ class TestColorFormatting(unittest.TestCase):
         colored_text = f"{color}{text}{Style.RESET_ALL}"
         self.assertIn(colored_text, output)
 
-    @patch('requests.post')
+    @patch("requests.post")
     def test_success_message_colors(self, mock_post):
         """Test that success messages use green color"""
         # Mock successful response
@@ -493,7 +511,7 @@ class TestColorFormatting(unittest.TestCase):
         mock_response.status_code = 200
         mock_response.json.return_value = {
             "results": ["result1", "result2"],
-            "metadata": {"job_id": "test_job_id"}
+            "metadata": {"job_id": "test_job_id"},
         }
         mock_post.return_value = mock_response
 
@@ -504,16 +522,18 @@ class TestColorFormatting(unittest.TestCase):
         output = self.get_captured_output()
 
         # Success indicators should be green
-        self.assert_colored_text_in_output("✔ Materialized results received", Fore.GREEN, output)
+        self.assert_colored_text_in_output(
+            "✔ Materialized results received", Fore.GREEN, output
+        )
 
         # Job ID reference should be blue (informational)
         self.assert_colored_text_in_output(
             f"You can re-obtain the results with `mi.get_job_results('test_job_id')`",
             Fore.BLUE,
-            output
+            output,
         )
 
-    @patch('requests.post')
+    @patch("requests.post")
     def test_error_message_colors(self, mock_post):
         """Test that error messages use red color"""
         # Mock failed response
@@ -531,12 +551,14 @@ class TestColorFormatting(unittest.TestCase):
         # Error indicators should be red
         self.assert_colored_text_in_output(f"Error: 400", Fore.RED, output)
         self.assert_colored_text_in_output(
-            '{"error": "Bad request"}' if '{"error": "Bad request"}' in output else "{'error': 'Bad request'}",
+            '{"error": "Bad request"}'
+            if '{"error": "Bad request"}' in output
+            else "{'error': 'Bad request'}",
             Fore.RED,
-            output
+            output,
         )
 
-    @patch('requests.get')
+    @patch("requests.get")
     def test_in_progress_message_colors(self, mock_get):
         """Test that in-progress messages use blue color"""
         # Mock successful response
@@ -552,20 +574,26 @@ class TestColorFormatting(unittest.TestCase):
         output = self.get_captured_output()
 
         # In-progress/processing messages should be blue
-        self.assert_colored_text_in_output(f"Checking job status with ID: test_job_id", Fore.BLUE, output)
+        self.assert_colored_text_in_output(
+            f"Checking job status with ID: test_job_id", Fore.BLUE, output
+        )
 
         # Success indicators should be green
-        self.assert_colored_text_in_output("✔ Job status retrieved!", Fore.GREEN, output)
+        self.assert_colored_text_in_output(
+            "✔ Job status retrieved!", Fore.GREEN, output
+        )
 
-    @patch('requests.post')
+    @patch("requests.post")
     def test_stage_upload_progress_colors(self, mock_post):
         """Test color formatting during file upload progress"""
         # Setup mocks
-        with patch('os.path.isdir') as mock_isdir, \
-                patch('os.listdir') as mock_listdir, \
-                patch('os.path.basename') as mock_basename, \
-                patch('builtins.open') as mock_open, \
-                patch.object(MaterializedIntelligence, 'create_stage') as mock_create_stage:
+        with patch("os.path.isdir") as mock_isdir, patch(
+            "os.listdir"
+        ) as mock_listdir, patch("os.path.basename") as mock_basename, patch(
+            "builtins.open"
+        ) as mock_open, patch.object(
+            MaterializedIntelligence, "create_stage"
+        ) as mock_create_stage:
             # Configure mocks
             mock_create_stage.return_value = "test_stage_id"
             mock_isdir.return_value = True
@@ -585,22 +613,28 @@ class TestColorFormatting(unittest.TestCase):
             output = self.get_captured_output()
 
             # Progress messages should be blue
-            self.assert_colored_text_in_output("Uploading files to stage: test_stage_id", Fore.BLUE, output)
-            self.assert_colored_text_in_output("Uploading file 1/2 to stage: test_stage_id", Fore.BLUE, output)
-            self.assert_colored_text_in_output("Uploading file 2/2 to stage: test_stage_id", Fore.BLUE, output)
+            self.assert_colored_text_in_output(
+                "Uploading files to stage: test_stage_id", Fore.BLUE, output
+            )
+            self.assert_colored_text_in_output(
+                "Uploading file 1/2 to stage: test_stage_id", Fore.BLUE, output
+            )
+            self.assert_colored_text_in_output(
+                "Uploading file 2/2 to stage: test_stage_id", Fore.BLUE, output
+            )
 
             # Success message should be green
-            self.assert_colored_text_in_output("✔ 2 files successfully uploaded to stage", Fore.GREEN, output)
+            self.assert_colored_text_in_output(
+                "✔ 2 files successfully uploaded to stage", Fore.GREEN, output
+            )
 
-    @patch('requests.post')
+    @patch("requests.post")
     def test_job_priority_message_colors(self, mock_post):
         """Test color formatting for priority job messages"""
         # Mock response for priority job
         mock_response = MagicMock()
         mock_response.status_code = 200
-        mock_response.json.return_value = {
-            "results": "job_priority_id"
-        }
+        mock_response.json.return_value = {"results": "job_priority_id"}
         mock_post.return_value = mock_response
 
         # Call with priority
@@ -613,9 +647,11 @@ class TestColorFormatting(unittest.TestCase):
         self.assert_colored_text_in_output("Creating priority 2 job", Fore.BLUE, output)
 
         # Success message should be green
-        self.assert_colored_text_in_output("Priority 2 Job created with ID: job_priority_id", Fore.GREEN, output)
+        self.assert_colored_text_in_output(
+            "Priority 2 Job created with ID: job_priority_id", Fore.GREEN, output
+        )
 
-    @patch('requests.get')
+    @patch("requests.get")
     def test_auth_failure_colors(self, mock_get):
         """Test color formatting for authentication failure messages"""
         # Mock auth failure response
@@ -631,35 +667,41 @@ class TestColorFormatting(unittest.TestCase):
         output = self.get_captured_output()
 
         # Auth failure should be red
-        self.assert_colored_text_in_output("API key failed to authenticate: 401", Fore.RED, output)
+        self.assert_colored_text_in_output(
+            "API key failed to authenticate: 401", Fore.RED, output
+        )
 
-    @patch('requests.post')
+    @patch("requests.post")
     def test_network_error_colors(self, mock_post):
         """Test color formatting for network error messages"""
         # Mock network error
         mock_post.side_effect = Exception("Connection error")
 
         # Patch upload_to_stage to handle the exception
-        with patch.object(MaterializedIntelligence, 'upload_to_stage',
-                          side_effect=lambda *a, **kw: print(
-                              to_colored_text("Upload failed: Connection error", state="fail"))):
+        with patch.object(
+            MaterializedIntelligence,
+            "upload_to_stage",
+            side_effect=lambda *a, **kw: print(
+                to_colored_text("Upload failed: Connection error", state="fail")
+            ),
+        ):
             self.mi.upload_to_stage("test_stage", "test_file.txt")
 
         # Get output and check color formatting
         output = self.get_captured_output()
 
         # Network error should be red
-        self.assert_colored_text_in_output("Upload failed: Connection error", Fore.RED, output)
+        self.assert_colored_text_in_output(
+            "Upload failed: Connection error", Fore.RED, output
+        )
 
-    @patch('requests.post')
+    @patch("requests.post")
     def test_dry_run_colors(self, mock_post):
         """Test color formatting for dry run messages"""
         # Mock dry run response
         mock_response = MagicMock()
         mock_response.status_code = 200
-        mock_response.json.return_value = {
-            "results": {"tokens": 100, "cost": "$0.01"}
-        }
+        mock_response.json.return_value = {"results": {"tokens": 100, "cost": "$0.01"}}
         mock_post.return_value = mock_response
 
         # Call with dry run
@@ -669,12 +711,16 @@ class TestColorFormatting(unittest.TestCase):
         output = self.get_captured_output()
 
         # Dry run message should be blue (processing)
-        self.assert_colored_text_in_output("Retrieving cost estimates...", Fore.BLUE, output)
+        self.assert_colored_text_in_output(
+            "Retrieving cost estimates...", Fore.BLUE, output
+        )
 
         # Success message should be green
-        self.assert_colored_text_in_output("✔ Cost estimates retrieved", Fore.GREEN, output)
+        self.assert_colored_text_in_output(
+            "✔ Cost estimates retrieved", Fore.GREEN, output
+        )
 
-    @patch('requests.get')
+    @patch("requests.get")
     def test_cancel_job_colors(self, mock_get):
         """Test color formatting for job cancellation messages"""
         # Mock successful response
@@ -690,12 +736,14 @@ class TestColorFormatting(unittest.TestCase):
         output = self.get_captured_output()
 
         # Cancellation in progress should be blue
-        self.assert_colored_text_in_output("Cancelling job: test_job_id", Fore.BLUE, output)
+        self.assert_colored_text_in_output(
+            "Cancelling job: test_job_id", Fore.BLUE, output
+        )
 
         # Success message should be green
         self.assert_colored_text_in_output("✔ Job cancelled", Fore.GREEN, output)
 
-    @patch('requests.get')
+    @patch("requests.get")
     def test_cancel_job_failure_colors(self, mock_get):
         """Test color formatting for job cancellation failure messages"""
         # Mock failed response
@@ -713,9 +761,11 @@ class TestColorFormatting(unittest.TestCase):
         # Failure message should be red
         self.assert_colored_text_in_output("Failed to cancel job", Fore.RED, output)
         self.assert_colored_text_in_output(
-            '{"error": "Job not found"}' if '{"error": "Job not found"}' in output else "{'error': 'Job not found'}",
+            '{"error": "Job not found"}'
+            if '{"error": "Job not found"}' in output
+            else "{'error': 'Job not found'}",
             Fore.RED,
-            output
+            output,
         )
 
     def test_color_consistency_across_methods(self):
@@ -724,7 +774,7 @@ class TestColorFormatting(unittest.TestCase):
         states = {
             "success": Fore.GREEN,
             "fail": Fore.RED,
-            None: Fore.BLUE  # Default is blue
+            None: Fore.BLUE,  # Default is blue
         }
 
         # Test each state with same message
