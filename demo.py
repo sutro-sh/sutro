@@ -25,8 +25,8 @@ results = mi.infer(
     column="TITLE",
     system_prompt=system_prompt,
     model="llama-3.1-8b",
-    json_schema=json_schema,
     job_priority=0,
+    stay_attached=True,
 )
 
 # jobs = mi.list_jobs()

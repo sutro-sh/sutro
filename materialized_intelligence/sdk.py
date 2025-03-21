@@ -307,8 +307,8 @@ class MaterializedIntelligence:
                 # TODO: we implment retries in cases where the job hasn't written results yet
                 # it would be better if we could receive a fully succeeded status from the job
                 # and not have such a race condition
-                max_retries = 20 # winds up being 100 seconds cumulative delay
-                retry_delay = 5 # initial delay in seconds
+                max_retries = 3
+                retry_delay = 1  # initial delay in seconds
 
                 for _ in range(max_retries):
                     time.sleep(retry_delay)
@@ -321,10 +321,12 @@ class MaterializedIntelligence:
                     if job_results_response.status_code == 200:
                         break
 
+                    retry_delay *= 2  # exponential backoff
+
                 if job_results_response.status_code != 200:
                     spinner.write(
                         to_colored_text(
-                            "Job succeeded, but results are not yet available. Use `mi.get_job_results('{job_id}')` to obtain results.",
+                            "Failed to obtain job results. Please check the job status with `mi.get_job_status('{job_id}')`",
                             state="fail",
                         )
                     )
