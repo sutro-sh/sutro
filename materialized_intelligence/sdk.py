@@ -375,6 +375,9 @@ class MaterializedIntelligence:
             "Content-Type": "application/json",
         }
 
+        # TODO(cooper) we should add a get jobs endpoint:
+        # GET /jobs/{job_id}
+
         # Get job information from list-jobs endpoint
         jobs_response = s.get(
             f"{self.base_url}/list-jobs",
