@@ -3,7 +3,7 @@ import click
 from colorama import Fore, Style
 import os
 import json
-from materialized_intelligence.sdk import MaterializedIntelligence
+from sdk import MaterializedIntelligence
 import polars as pl
 import warnings
 
@@ -387,6 +387,15 @@ def quotas():
         + "To increase your quotas, contact us at team@materialized.dev."
         + Style.RESET_ALL
     )
+
+@jobs.command()
+@click.argument("job_id")
+def attach(job_id):
+    """Attach to a running job and stream its progress."""
+    sdk = get_sdk()
+    result = sdk.attach(job_id)
+    if not result:
+        return
 
 
 if __name__ == "__main__":

@@ -356,6 +356,97 @@ class MaterializedIntelligence:
 
                 return results
 
+    def attach(self, job_id):
+        """
+        Attach to an existing job and stream its progress.
+
+        Args:
+            job_id (str): The ID of the job to attach to
+        """
+
+        s = requests.Session()
+        payload = {
+            "job_id": job_id,
+        }
+        pbar = None
+
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+
+        # Get job information from list-jobs endpoint
+        jobs_response = s.get(
+            f"{self.base_url}/list-jobs",
+            headers=headers
+        )
+        jobs_response.raise_for_status()
+
+        # Find the specific job we want to attach to
+        job = next(
+            (job for job in jobs_response.json()["jobs"] if job["job_id"] == job_id),
+            None
+        )
+
+        if not job:
+            print(Fore.RED + f"Job {job_id} not found" + Style.RESET_ALL)
+            return
+
+        total_rows = job["num_rows"]
+        success = False
+
+        with s.get(
+                f"{self.base_url}/stream-job-progress/{job_id}",
+                headers=headers,
+                stream=True,
+        ) as streaming_response:
+            streaming_response.raise_for_status()
+            spinner = yaspin(
+                SPINNER,
+                text=to_colored_text("Awaiting status updates..."),
+                color=YASPIN_COLOR,
+            )
+            spinner.start()
+            for line in streaming_response.iter_lines():
+                if line:
+                    try:
+                        json_obj = json.loads(line)
+                    except json.JSONDecodeError:
+                        print("Error: ", line, flush=True)
+                        continue
+
+                    if json_obj["update_type"] == "progress":
+                        if pbar is None:
+                            spinner.stop()
+                            postfix = f"Input tokens processed: 0"
+                            pbar = self.fancy_tqdm(
+                                total=total_rows,
+                                desc="Progress",
+                                style=1,
+                                postfix=postfix,
+                            )
+                        if json_obj["result"] > pbar.n:
+                            pbar.update(json_obj["result"] - pbar.n)
+                            pbar.refresh()
+                        if json_obj["result"] == total_rows:
+                            pbar.close()
+                            success = True
+                    elif json_obj["update_type"] == "tokens":
+                        if pbar is not None:
+                            pbar.postfix = f"Input tokens processed: {json_obj['result']['input_tokens']}, Tokens generated: {json_obj['result']['output_tokens']}, Total tokens/s: {json_obj['result']['total_tokens_processed_per_second']}"
+                            pbar.refresh()
+
+            if success:
+                spinner.write(
+                    to_colored_text(
+                        f"✔ Job succeeded. Use `mi jobs results {job_id}` to obtain results.",
+                        state="success",
+                    )
+                )
+                spinner.stop()
+
+
+
     def fancy_tqdm(
         self,
         total: int,
