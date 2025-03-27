@@ -3,7 +3,7 @@ import click
 from colorama import Fore, Style
 import os
 import json
-from sdk import MaterializedIntelligence
+from materialized_intelligence.sdk import MaterializedIntelligence
 import polars as pl
 import warnings
 
