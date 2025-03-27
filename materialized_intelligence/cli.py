@@ -393,9 +393,7 @@ def quotas():
 def attach(job_id):
     """Attach to a running job and stream its progress."""
     sdk = get_sdk()
-    result = sdk.attach(job_id)
-    if not result:
-        return
+    sdk.attach(job_id)
 
 
 if __name__ == "__main__":
