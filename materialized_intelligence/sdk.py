@@ -375,25 +375,46 @@ class MaterializedIntelligence:
             "Content-Type": "application/json",
         }
 
-        # TODO(cooper) we should add a get jobs endpoint:
-        # GET /jobs/{job_id}
+        with yaspin(
+                SPINNER,
+                text=to_colored_text("Looking for job..."),
+                color=YASPIN_COLOR,
+        ) as spinner:
+            # Get job information from list-jobs endpoint
+            # TODO(cooper) we should add a get jobs endpoint:
+            # GET /jobs/{job_id}
+            jobs_response = s.get(
+                f"{self.base_url}/list-jobs",
+                headers=headers
+            )
+            jobs_response.raise_for_status()
 
-        # Get job information from list-jobs endpoint
-        jobs_response = s.get(
-            f"{self.base_url}/list-jobs",
-            headers=headers
-        )
-        jobs_response.raise_for_status()
+            # Find the specific job we want to attach to
+            job = next(
+                (job for job in jobs_response.json()["jobs"] if job["job_id"] == job_id),
+                None
+            )
 
-        # Find the specific job we want to attach to
-        job = next(
-            (job for job in jobs_response.json()["jobs"] if job["job_id"] == job_id),
-            None
-        )
+            if not job:
+                spinner.write(to_colored_text(f"Job {job_id} not found", state="fail"))
+                return
 
-        if not job:
-            print(Fore.RED + f"Job {job_id} not found" + Style.RESET_ALL)
-            return
+            match job.get("status"):
+                case "SUCCEEDED":
+                    spinner.write(
+                        to_colored_text(
+                            f"Job already completed. You can obtain the results with `mi jobs results {job_id}`"
+                        )
+                    )
+                    return
+                case "FAILED":
+                    spinner.write(to_colored_text("❌ Job is in failed state.", state="fail"))
+                    return
+                case "CANCELLED":
+                    spinner.write(to_colored_text("❌ Job was cancelled.", state="fail"))
+                    return
+                case _:
+                    spinner.write(to_colored_text("✔ Job found!", state="success"))
 
         total_rows = job["num_rows"]
         success = False
