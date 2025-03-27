@@ -266,6 +266,12 @@ def cancel(job_id):
 
     click.echo(Fore.GREEN + "Job cancelled successfully." + Style.RESET_ALL)
 
+@jobs.command()
+@click.argument("job_id")
+def attach(job_id):
+    """Attach to a running job."""
+    sdk = get_sdk()
+    sdk.attach_to_job(job_id)
 
 @cli.group()
 def stages():
