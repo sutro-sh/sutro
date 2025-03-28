@@ -388,6 +388,13 @@ def quotas():
         + Style.RESET_ALL
     )
 
+@jobs.command()
+@click.argument("job_id")
+def attach(job_id):
+    """Attach to a running job and stream its progress."""
+    sdk = get_sdk()
+    sdk.attach(job_id)
+
 
 if __name__ == "__main__":
     cli()
