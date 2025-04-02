@@ -1,8 +1,12 @@
+import threading
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
+
 import requests
 import pandas as pd
 import polars as pl
 import json
-from typing import Union, List, Optional, Literal
+from typing import Union, List, Optional, Literal, Generator
 import os
 import sys
 from yaspin import yaspin
@@ -56,6 +60,7 @@ class MaterializedIntelligence:
     ):
         self.api_key = api_key or self.check_for_api_key()
         self.base_url = base_url
+        self.HEARTBEAT_INTERVAL_SECONDS = 15  # Keep in sync w what the backend expects
 
     def check_for_api_key(self):
         """
@@ -253,47 +258,52 @@ class MaterializedIntelligence:
                 "job_id": job_id,
             }
             pbar = None
-            with s.get(
-                f"{self.base_url}/stream-job-progress/{job_id}",
-                headers=headers,
-                stream=True,
-            ) as streaming_response:
-                streaming_response.raise_for_status()
-                spinner = yaspin(
-                    SPINNER,
-                    text=to_colored_text("Awaiting status updates..."),
-                    color=YASPIN_COLOR,
-                )
-                spinner.start()
-                for line in streaming_response.iter_lines():
-                    if line:
-                        try:
-                            json_obj = json.loads(line)
-                        except json.JSONDecodeError:
-                            print("Error: ", line, flush=True)
-                            continue
 
-                        if json_obj["update_type"] == "progress":
-                            if pbar is None:
-                                spinner.stop()
-                                postfix = f"Input tokens processed: 0"
-                                pbar = self.fancy_tqdm(
-                                    total=len(input_data),
-                                    desc="Progress",
-                                    style=1,
-                                    postfix=postfix,
-                                )
-                            if json_obj["result"] > pbar.n:
-                                pbar.update(json_obj["result"] - pbar.n)
-                                pbar.refresh()
-                            if json_obj["result"] == len(input_data):
-                                pbar.close()
-                                success = True
-                        elif json_obj["update_type"] == "tokens":
-                            if pbar is not None:
-                                pbar.postfix = f"Input tokens processed: {json_obj['result']['input_tokens']}, Tokens generated: {json_obj['result']['output_tokens']}, Total tokens/s: {json_obj['result']['total_tokens_processed_per_second']}"
-                                pbar.refresh()
+            # Register for stream and get session token
+            session_token = self.register_stream_listener(job_id)
 
+            # Use the heartbeat session context manager
+            with self.stream_heartbeat_session(job_id, session_token) as s:
+                with s.get(
+                        f"{self.base_url}/stream-job-progress/{job_id}?request_session_token={session_token}",
+                        headers=headers,
+                        stream=True,
+                ) as streaming_response:
+                    streaming_response.raise_for_status()
+                    spinner = yaspin(
+                        SPINNER,
+                        text=to_colored_text("Awaiting status updates..."),
+                        color=YASPIN_COLOR,
+                    )
+                    spinner.start()
+                    for line in streaming_response.iter_lines():
+                        if line:
+                            try:
+                                json_obj = json.loads(line)
+                            except json.JSONDecodeError:
+                                print("Error: ", line, flush=True)
+                                continue
+
+                            if json_obj["update_type"] == "progress":
+                                if pbar is None:
+                                    spinner.stop()
+                                    postfix = f"Input tokens processed: 0"
+                                    pbar = self.fancy_tqdm(
+                                        total=len(input_data),
+                                        desc="Progress",
+                                        style=1,
+                                        postfix=postfix,
+                                    )
+                                if json_obj["result"] > pbar.n:
+                                    pbar.update(json_obj["result"] - pbar.n)
+                                    pbar.refresh()
+                                if json_obj["result"] == len(input_data):
+                                    pbar.close()
+                                    success = True
+                            elif json_obj["update_type"] == "tokens":
+                                if pbar is not None:
+                                    pbar.postfix = f"Input tokens processed: {json_obj['result']['input_tokens']}, Tokens generated: {json_obj['result']['output_tokens']}, Total tokens/s: {json_obj['result'].get('total_tokens_processed_per_second')}"
+                                    pbar.refresh()
             if success:
                 spinner.text = to_colored_text(
                     "✔ Job succeeded. Obtaining results...", state="success"
@@ -355,6 +365,89 @@ class MaterializedIntelligence:
                     return data
 
                 return results
+
+    def register_stream_listener(self, job_id: str) -> str:
+        """Register a new stream listener and get a session token."""
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+        with requests.post(
+                f"{self.base_url}/register-stream-listener/{job_id}",
+                headers=headers,
+        ) as response:
+            response.raise_for_status()
+            data = response.json()
+            return data["request_session_token"]
+
+    def unregister_stream_listener(self, job_id: str, session_token: str):
+        """Explicitly unregister a stream listener."""
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+        with requests.post(
+                f"{self.base_url}/unregister-stream-listener/{job_id}",
+                headers=headers,
+                json={"request_session_token": session_token},
+        ) as response:
+            response.raise_for_status()
+
+    def start_heartbeat(
+            self,
+            job_id: str,
+            session_token: str,
+            session: requests.Session,
+            stop_event: threading.Event
+    ):
+        """Send heartbeats until stopped."""
+        while not stop_event.is_set():
+            try:
+                headers = {
+                    "Authorization": f"Bearer {self.api_key}",
+                    "Content-Type": "application/json",
+                }
+                response = session.post(
+                    f"{self.base_url}/stream-heartbeat/{job_id}",
+                    headers=headers,
+                    params={"request_session_token": session_token},
+                )
+                response.raise_for_status()
+            except Exception as e:
+                if not stop_event.is_set():  # Only log if we weren't stopping anyway
+                    print(f"Heartbeat failed for job {job_id}: {e}")
+
+            # Use time.sleep instead of asyncio.sleep since this is synchronous
+            time.sleep(self.HEARTBEAT_INTERVAL_SECONDS)
+
+    @contextmanager
+    def stream_heartbeat_session(self, job_id: str, session_token: str) -> Generator[requests.Session, None]:
+        """Context manager that handles session registration and heartbeat."""
+        session = requests.Session()
+        stop_heartbeat = threading.Event()
+
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            # Submit heartbeat task
+            future = executor.submit(
+                self.start_heartbeat,
+                job_id,
+                session_token,
+                session,
+                stop_heartbeat
+            )
+
+            try:
+                yield session
+            finally:
+                # Signal stop and cleanup
+                stop_heartbeat.set()
+                # Wait for heartbeat to finish with timeout
+                try:
+                    future.result(timeout=2.0)
+                except TimeoutError:
+                    print(f"Heartbeat shutdown timed out for job {job_id}")
+                self.unregister_stream_listener(job_id, session_token)
+                session.close()
 
     def attach(self, job_id):
         """
@@ -419,55 +512,59 @@ class MaterializedIntelligence:
         total_rows = job["num_rows"]
         success = False
 
-        with s.get(
-                f"{self.base_url}/stream-job-progress/{job_id}",
-                headers=headers,
-                stream=True,
-        ) as streaming_response:
-            streaming_response.raise_for_status()
-            spinner = yaspin(
-                SPINNER,
-                text=to_colored_text("Awaiting status updates..."),
-                color=YASPIN_COLOR,
-            )
-            spinner.start()
-            for line in streaming_response.iter_lines():
-                if line:
-                    try:
-                        json_obj = json.loads(line)
-                    except json.JSONDecodeError:
-                        print("Error: ", line, flush=True)
-                        continue
+        session_token = self.register_stream_listener(job_id)
 
-                    if json_obj["update_type"] == "progress":
-                        if pbar is None:
-                            spinner.stop()
-                            postfix = f"Input tokens processed: 0"
-                            pbar = self.fancy_tqdm(
-                                total=total_rows,
-                                desc="Progress",
-                                style=1,
-                                postfix=postfix,
-                            )
-                        if json_obj["result"] > pbar.n:
-                            pbar.update(json_obj["result"] - pbar.n)
-                            pbar.refresh()
-                        if json_obj["result"] == total_rows:
-                            pbar.close()
-                            success = True
-                    elif json_obj["update_type"] == "tokens":
-                        if pbar is not None:
-                            pbar.postfix = f"Input tokens processed: {json_obj['result']['input_tokens']}, Tokens generated: {json_obj['result']['output_tokens']}, Total tokens/s: {json_obj['result']['total_tokens_processed_per_second']}"
-                            pbar.refresh()
-
-            if success:
-                spinner.write(
-                    to_colored_text(
-                        f"✔ Job succeeded. Use `mi jobs results {job_id}` to obtain results.",
-                        state="success",
-                    )
+        # TODO test and add to infer
+        with self.stream_heartbeat_session(job_id, session_token) as s:
+            with s.get(
+                    f"{self.base_url}/stream-job-progress/{job_id}?request_session_token={session_token}",
+                    headers=headers,
+                    stream=True,
+            ) as streaming_response:
+                streaming_response.raise_for_status()
+                spinner = yaspin(
+                    SPINNER,
+                    text=to_colored_text("Awaiting status updates..."),
+                    color=YASPIN_COLOR,
                 )
-                spinner.stop()
+                spinner.start()
+                for line in streaming_response.iter_lines():
+                    if line:
+                        try:
+                            json_obj = json.loads(line)
+                        except json.JSONDecodeError:
+                            print("Error: ", line, flush=True)
+                            continue
+
+                        if json_obj["update_type"] == "progress":
+                            if pbar is None:
+                                spinner.stop()
+                                postfix = f"Input tokens processed: 0"
+                                pbar = self.fancy_tqdm(
+                                    total=total_rows,
+                                    desc="Progress",
+                                    style=1,
+                                    postfix=postfix,
+                                )
+                            if json_obj["result"] > pbar.n:
+                                pbar.update(json_obj["result"] - pbar.n)
+                                pbar.refresh()
+                            if json_obj["result"] == total_rows:
+                                pbar.close()
+                                success = True
+                        elif json_obj["update_type"] == "tokens":
+                            if pbar is not None:
+                                pbar.postfix = f"Input tokens processed: {json_obj['result']['input_tokens']}, Tokens generated: {json_obj['result']['output_tokens']}, Total tokens/s: {json_obj['result']['total_tokens_processed_per_second']}"
+                                pbar.refresh()
+
+                if success:
+                    spinner.write(
+                        to_colored_text(
+                            f"✔ Job succeeded. Use `mi jobs results {job_id}` to obtain results.",
+                            state="success",
+                        )
+                    )
+                    spinner.stop()
 
 
 
