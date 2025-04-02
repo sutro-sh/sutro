@@ -380,6 +380,7 @@ class MaterializedIntelligence:
             data = response.json()
             return data["request_session_token"]
 
+    # This is a best effort action and is ok if it sometimes doesn't complete etc
     def unregister_stream_listener(self, job_id: str, session_token: str):
         """Explicitly unregister a stream listener."""
         headers = {
@@ -426,8 +427,9 @@ class MaterializedIntelligence:
         session = requests.Session()
         stop_heartbeat = threading.Event()
 
+        # Run this concurrently in a thread so we can not block main SDK path/behavior
+        # but still run heartbeat requests
         with ThreadPoolExecutor(max_workers=1) as executor:
-            # Submit heartbeat task
             future = executor.submit(
                 self.start_heartbeat,
                 job_id,
@@ -514,7 +516,6 @@ class MaterializedIntelligence:
 
         session_token = self.register_stream_listener(job_id)
 
-        # TODO test and add to infer
         with self.stream_heartbeat_session(job_id, session_token) as s:
             with s.get(
                     f"{self.base_url}/stream-job-progress/{job_id}?request_session_token={session_token}",
