@@ -555,7 +555,7 @@ class MaterializedIntelligence:
                                 success = True
                         elif json_obj["update_type"] == "tokens":
                             if pbar is not None:
-                                pbar.postfix = f"Input tokens processed: {json_obj['result']['input_tokens']}, Tokens generated: {json_obj['result']['output_tokens']}, Total tokens/s: {json_obj['result']['total_tokens_processed_per_second']}"
+                                pbar.postfix = f"Input tokens processed: {json_obj['result']['input_tokens']}, Tokens generated: {json_obj['result']['output_tokens']}, Total tokens/s: {json_obj['result'].get('total_tokens_processed_per_second')}"
                                 pbar.refresh()
 
                 if success:
