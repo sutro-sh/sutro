@@ -445,7 +445,7 @@ class MaterializedIntelligence:
                 stop_heartbeat.set()
                 # Wait for heartbeat to finish with timeout
                 try:
-                    future.result(timeout=3.0)
+                    future.result(timeout=1.0)
                 except TimeoutError:
                     pass
                 self.unregister_stream_listener(job_id, session_token)
