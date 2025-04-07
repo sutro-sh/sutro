@@ -422,7 +422,7 @@ class MaterializedIntelligence:
             time.sleep(self.HEARTBEAT_INTERVAL_SECONDS)
 
     @contextmanager
-    def stream_heartbeat_session(self, job_id: str, session_token: str) -> Generator[requests.Session, None]:
+    def stream_heartbeat_session(self, job_id: str, session_token: str) -> Generator[requests.Session, None, None]:
         """Context manager that handles session registration and heartbeat."""
         session = requests.Session()
         stop_heartbeat = threading.Event()
