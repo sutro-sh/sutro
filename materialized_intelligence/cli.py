@@ -389,10 +389,21 @@ def quotas():
     )
 
 @jobs.command()
-@click.argument("job_id")
-def attach(job_id):
+@click.argument("job_id", required=False)
+@click.option("--latest", is_flag=True, help="Attach to the latest job.")
+def attach(job_id, latest):
     """Attach to a running job and stream its progress."""
     sdk = get_sdk()
+    if latest:
+        jobs = sdk.list_jobs()
+        if not jobs:
+            click.echo(Fore.YELLOW + "No jobs found." + Style.RESET_ALL)
+            return
+        job_id = jobs[0]["job_id"]
+        print(f"Attaching to latest job: {job_id}")
+    elif not job_id:
+        click.echo(Fore.YELLOW + "No job ID provided." + Style.RESET_ALL)
+        return
     sdk.attach(job_id)
 
 

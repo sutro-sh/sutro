@@ -161,10 +161,10 @@ class MaterializedIntelligence:
         job_priority: int = 0,
         json_schema: dict = None,
         sampling_params: dict = None,
-        num_workers: int = 1,
         system_prompt: str = None,
         dry_run: bool = False,
         stay_attached: bool = False,
+        random_seed_per_input: bool = False,
     ):
         """
         Run inference on the provided data.
@@ -182,6 +182,7 @@ class MaterializedIntelligence:
             system_prompt (str, optional): A system prompt to add to all inputs. This allows you to define the behavior of the model. Defaults to None.
             dry_run (bool, optional): If True, the method will return cost estimates instead of running inference. Defaults to False.
             stay_attached (bool, optional): If True, the method will stay attached to the job until it is complete. Defaults to True for prototyping jobs, False otherwise.
+            random_seed_per_input (bool, optional): If True, the method will use a different random seed for each input. Defaults to False.
 
         Returns:
             Union[List, pd.DataFrame, pl.DataFrame, str]: The results of the inference.
@@ -203,6 +204,7 @@ class MaterializedIntelligence:
             "system_prompt": system_prompt,
             "dry_run": dry_run,
             "sampling_params": sampling_params,
+            "random_seed_per_input": random_seed_per_input,
         }
         if dry_run:
             spinner_text = to_colored_text("Retrieving cost estimates...")
