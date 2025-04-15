@@ -193,7 +193,7 @@ class MaterializedIntelligence:
 
         endpoint = f"{self.base_url}/batch-inference"
         headers = {
-            "Authorization": f"Bearer {self.api_key}",
+            "Authorization": f"Key {self.api_key}",
             "Content-Type": "application/json",
         }
         payload = {
@@ -371,7 +371,7 @@ class MaterializedIntelligence:
     def register_stream_listener(self, job_id: str) -> str:
         """Register a new stream listener and get a session token."""
         headers = {
-            "Authorization": f"Bearer {self.api_key}",
+            "Authorization": f"Key {self.api_key}",
             "Content-Type": "application/json",
         }
         with requests.post(
@@ -386,7 +386,7 @@ class MaterializedIntelligence:
     def unregister_stream_listener(self, job_id: str, session_token: str):
         """Explicitly unregister a stream listener."""
         headers = {
-            "Authorization": f"Bearer {self.api_key}",
+            "Authorization": f"Key {self.api_key}",
             "Content-Type": "application/json",
         }
         with requests.post(
@@ -407,7 +407,7 @@ class MaterializedIntelligence:
         while not stop_event.is_set():
             try:
                 headers = {
-                    "Authorization": f"Bearer {self.api_key}",
+                    "Authorization": f"Key {self.api_key}",
                     "Content-Type": "application/json",
                 }
                 response = session.post(
@@ -468,7 +468,7 @@ class MaterializedIntelligence:
         pbar = None
 
         headers = {
-            "Authorization": f"Bearer {self.api_key}",
+            "Authorization": f"Key {self.api_key}",
             "Content-Type": "application/json",
         }
 
@@ -641,7 +641,7 @@ class MaterializedIntelligence:
         """
         endpoint = f"{self.base_url}/list-jobs"
         headers = {
-            "Authorization": f"Bearer {self.api_key}",
+            "Authorization": f"Key {self.api_key}",
             "Content-Type": "application/json",
         }
 
@@ -674,7 +674,7 @@ class MaterializedIntelligence:
         """
         endpoint = f"{self.base_url}/job-status/{job_id}"
         headers = {
-            "Authorization": f"Bearer {self.api_key}",
+            "Authorization": f"Key {self.api_key}",
             "Content-Type": "application/json",
         }
         with yaspin(
@@ -721,7 +721,7 @@ class MaterializedIntelligence:
             "include_cumulative_logprobs": include_cumulative_logprobs,
         }
         headers = {
-            "Authorization": f"Bearer {self.api_key}",
+            "Authorization": f"Key {self.api_key}",
             "Content-Type": "application/json",
         }
         with yaspin(
@@ -761,7 +761,7 @@ class MaterializedIntelligence:
         """
         endpoint = f"{self.base_url}/job-cancel/{job_id}"
         headers = {
-            "Authorization": f"Bearer {self.api_key}",
+            "Authorization": f"Key {self.api_key}",
             "Content-Type": "application/json",
         }
         with yaspin(
@@ -790,7 +790,7 @@ class MaterializedIntelligence:
         """
         endpoint = f"{self.base_url}/create-stage"
         headers = {
-            "Authorization": f"Bearer {self.api_key}",
+            "Authorization": f"Key {self.api_key}",
             "Content-Type": "application/json",
         }
         with yaspin(
@@ -876,7 +876,8 @@ class MaterializedIntelligence:
                     "stage_id": stage_id,
                 }
 
-                headers = {"Authorization": f"Bearer {self.api_key}"}
+                headers = {
+                    "Authorization": f"Key {self.api_key}"}
 
                 count += 1
                 spinner.write(
@@ -916,7 +917,7 @@ class MaterializedIntelligence:
     def list_stages(self):
         endpoint = f"{self.base_url}/list-stages"
         headers = {
-            "Authorization": f"Bearer {self.api_key}",
+            "Authorization": f"Key {self.api_key}",
             "Content-Type": "application/json",
         }
         with yaspin(
@@ -937,7 +938,7 @@ class MaterializedIntelligence:
     def list_stage_files(self, stage_id: str):
         endpoint = f"{self.base_url}/list-stage-files"
         headers = {
-            "Authorization": f"Bearer {self.api_key}",
+            "Authorization": f"Key {self.api_key}",
             "Content-Type": "application/json",
         }
         payload = {
@@ -997,7 +998,7 @@ class MaterializedIntelligence:
             count = 0
             for file in files:
                 headers = {
-                    "Authorization": f"Bearer {self.api_key}",
+                    "Authorization": f"Key {self.api_key}",
                     "Content-Type": "application/json",
                 }
                 payload = {
@@ -1043,7 +1044,7 @@ class MaterializedIntelligence:
         """
         endpoint = f"{self.base_url}/try-authentication"
         headers = {
-            "Authorization": f"Bearer {api_key}",
+            "Authorization": f"Key {api_key}",
             "Content-Type": "application/json",
         }
         with yaspin(
@@ -1065,7 +1066,7 @@ class MaterializedIntelligence:
     def get_quotas(self):
         endpoint = f"{self.base_url}/get-quotas"
         headers = {
-            "Authorization": f"Bearer {self.api_key}",
+            "Authorization": f"Key {self.api_key}",
             "Content-Type": "application/json",
         }
         with yaspin(
