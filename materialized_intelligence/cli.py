@@ -91,6 +91,7 @@ def login():
     """Set or update your API key for Materialized Intelligence."""
     config = load_config()
     default_api_key = config.get("api_key", "")
+    default_base_url = config.get("base_url", "https://api.materialized.dev")
     click.echo(
         "Hint: An API key is already set. Press Enter to keep the existing key."
         if default_api_key
@@ -126,7 +127,7 @@ def login():
             Fore.GREEN + "Successfully authenticated. Welcome back!" + Style.RESET_ALL
         )
 
-    save_config({"api_key": api_key})
+    save_config({"api_key": api_key, "base_url": default_base_url})
 
 
 @cli.group()
