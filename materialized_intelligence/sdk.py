@@ -165,6 +165,7 @@ class MaterializedIntelligence:
         dry_run: bool = False,
         stay_attached: bool = False,
         random_seed_per_input: bool = False,
+        truncate_rows: bool = False
     ):
         """
         Run inference on the provided data.
@@ -176,13 +177,15 @@ class MaterializedIntelligence:
             data (Union[List, pd.DataFrame, pl.DataFrame, str]): The data to run inference on.
             model (str, optional): The model to use for inference. Defaults to "llama-3.1-8b".
             column (str, optional): The column name to use for inference. Required if data is a DataFrame, file path, or stage.
-            output_column (str, optional): The column name to store the inference results in if input is a DataFrame. Defaults to "inference_result".
+            output_column (str, optional): The column name to store the inference results in if the input is a DataFrame. Defaults to "inference_result".
             job_priority (int, optional): The priority of the job. Defaults to 0.
             json_schema (dict, optional): A JSON schema for the output. Defaults to None.
+            sampling_params: (dict, optional): The sampling parameters to use at generation time, ie temperature, top_p etc.
             system_prompt (str, optional): A system prompt to add to all inputs. This allows you to define the behavior of the model. Defaults to None.
             dry_run (bool, optional): If True, the method will return cost estimates instead of running inference. Defaults to False.
             stay_attached (bool, optional): If True, the method will stay attached to the job until it is complete. Defaults to True for prototyping jobs, False otherwise.
             random_seed_per_input (bool, optional): If True, the method will use a different random seed for each input. Defaults to False.
+            truncate_rows (bool, optional): If True, any rows that have a token count exceeding the context window length of the selected model will be truncated to the max length that will fit within the context window.
 
         Returns:
             Union[List, pd.DataFrame, pl.DataFrame, str]: The results of the inference.
@@ -205,6 +208,7 @@ class MaterializedIntelligence:
             "dry_run": dry_run,
             "sampling_params": sampling_params,
             "random_seed_per_input": random_seed_per_input,
+            "truncate_rows": truncate_rows
         }
         if dry_run:
             spinner_text = to_colored_text("Retrieving cost estimates...")
