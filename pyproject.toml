@@ -9,7 +9,7 @@ installer = "uv"
 
 [project]
 name = "materialized-intelligence"
-version = "0.1.10"
+version = "0.1.11"
 description = "Materialized Intelligence SDK"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -22,7 +22,8 @@ dependencies = [
     "click==8.1.7",
     "colorama==0.4.4",
     "yaspin==3.1.0",
-    "tqdm==4.67.1"
+    "tqdm==4.67.1",
+    "pydantic==2.11.4",
 ]
 
 [project.scripts]

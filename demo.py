@@ -1,16 +1,11 @@
 import materialized_intelligence as mi
 import polars as pl
+from pydantic import BaseModel
+
+mi.set_base_url("https://staging.api.materialized.dev")
 
 
-df = pl.read_parquet("hackernews_stories_chunk_0.parquet")
-
-mi = mi.MaterializedIntelligence()
-mi.set_base_url("https://cooper-test.api.materialized.dev")
-
-# stage_id = mi.create_stage()
-
-stage_id = 'stage-c7787aa9-8a63-4092-99bd-f38e76ffb377'
-# mi.upload_to_stage(stage_id, "hackernews_stories_chunk_0.parquet")
+df = pl.read_parquet("demo_data/sample_1000.parquet")
 
 system_prompt = """
 You will be shown a hacker news post's title and text (sometimes there is no text). Your job is to classify whether the post is related to aviation. It must explicitly, directly be related to aviation. If it is related to aviation, return True, otherwise return False. Provide a justification for your answer.
@@ -20,25 +15,30 @@ An example might be Title: "The Future of Aviation" Text: "The future of aviatio
 Another example might be Title: "Haskell is the best programming language" Text: None. This post is not related to aviation, so the answer is False.
 """
 
-json_schema = {
-    "type": "object",
-    "properties": {
-        "justification": {"type": "string"},
-        "is_aviation_related": {"type": "boolean"},
-    },
-    "required": ["justification", "is_aviation_related"]
-}
+class AviationClassification(BaseModel):
+    justification: str
+    is_aviation_related: bool
+
+# json_schema = {
+#     "type": "object",
+#     "properties": {
+#         "justification": {"type": "string"},
+#         "is_aviation_related": {"type": "boolean"},
+#     },
+#     "required": ["justification", "is_aviation_related"]
+# }
 
 results = mi.infer(
-    df.slice(0, 200),
-    column="input",
+    df,
+    column="TITLE",
     system_prompt=system_prompt,
-    model="qwen-qwq-32b-8k",
-    json_schema=json_schema,
-    job_priority=0,
+    model="llama-3.1-8b",
+    output_schema=AviationClassification,
 )
 
 print(results)
+# results = mi.get_job_results('job-13d33518-3812-45d5-9f48-90128dcad1e4')
+# print(results)
 
 # jobs = mi.list_jobs()
 # for job in jobs:
