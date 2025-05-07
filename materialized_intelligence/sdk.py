@@ -6,7 +6,7 @@ import requests
 import pandas as pd
 import polars as pl
 import json
-from typing import Union, List, Optional, Literal, Generator
+from typing import Union, List, Optional, Literal, Generator, Dict, Any
 import os
 import sys
 from yaspin import yaspin
@@ -14,7 +14,8 @@ from yaspin.spinners import Spinners
 from colorama import init, Fore, Back, Style
 from tqdm import tqdm
 import time
-
+from pydantic import BaseModel
+import json
 
 # Initialize colorama (required for Windows)
 init()
@@ -159,7 +160,7 @@ class MaterializedIntelligence:
         column: str = None,
         output_column: str = "inference_result",
         job_priority: int = 0,
-        json_schema: dict = None,
+        output_schema: Union[Dict[str, Any], BaseModel] = None,
         sampling_params: dict = None,
         system_prompt: str = None,
         dry_run: bool = False,
@@ -178,7 +179,8 @@ class MaterializedIntelligence:
             column (str, optional): The column name to use for inference. Required if data is a DataFrame, file path, or stage.
             output_column (str, optional): The column name to store the inference results in if input is a DataFrame. Defaults to "inference_result".
             job_priority (int, optional): The priority of the job. Defaults to 0.
-            json_schema (dict, optional): A JSON schema for the output. Defaults to None.
+            output_schema (Union[Dict[str, Any], BaseModel], optional): A structured schema for the output. 
+                Can be either a dictionary representing a JSON schema or a pydantic BaseModel. Defaults to None.
             system_prompt (str, optional): A system prompt to add to all inputs. This allows you to define the behavior of the model. Defaults to None.
             dry_run (bool, optional): If True, the method will return cost estimates instead of running inference. Defaults to False.
             stay_attached (bool, optional): If True, the method will stay attached to the job until it is complete. Defaults to True for prototyping jobs, False otherwise.
@@ -190,6 +192,17 @@ class MaterializedIntelligence:
         """
         input_data = self.handle_data_helper(data, column)
         stay_attached = stay_attached or job_priority == 0
+
+        # Convert BaseModel to dict if needed
+        if output_schema is not None:
+            if hasattr(output_schema, 'model_json_schema'):  # Check for pydantic Model interface
+                json_schema = output_schema.model_json_schema()
+            elif isinstance(output_schema, dict):
+                json_schema = output_schema
+            else:
+                raise ValueError("Invalid output schema type. Must be a dictionary or a pydantic Model.")
+        else:
+            json_schema = None
 
         endpoint = f"{self.base_url}/batch-inference"
         headers = {
