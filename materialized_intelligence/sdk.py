@@ -185,7 +185,7 @@ class MaterializedIntelligence:
             dry_run (bool, optional): If True, the method will return cost estimates instead of running inference. Defaults to False.
             stay_attached (bool, optional): If True, the method will stay attached to the job until it is complete. Defaults to True for prototyping jobs, False otherwise.
             random_seed_per_input (bool, optional): If True, the method will use a different random seed for each input. Defaults to False.
-            truncate_rows (bool, optional): If True, any rows that have a token count exceeding the context window length of the selected model will be truncated to the max length that will fit within the context window.
+            truncate_rows (bool, optional): If True, any rows that have a token count exceeding the context window length of the selected model will be truncated to the max length that will fit within the context window. Defaults to False.
 
         Returns:
             Union[List, pd.DataFrame, pl.DataFrame, str]: The results of the inference.
