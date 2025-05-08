@@ -55,9 +55,9 @@ def to_colored_text(
             return f"{Fore.BLUE}{text}{Style.RESET_ALL}"
 
 
-class MaterializedIntelligence:
+class Sutro:
     def __init__(
-        self, api_key: str = None, base_url: str = "https://api.materialized.dev/"
+        self, api_key: str = None, base_url: str = "https://api.sutro.sh/"
     ):
         self.api_key = api_key or self.check_for_api_key()
         self.base_url = base_url
@@ -68,7 +68,7 @@ class MaterializedIntelligence:
         Check for an API key in the user's home directory.
 
         This method looks for a configuration file named 'config.json' in the
-        '.materialized_intelligence' directory within the user's home directory.
+        '.sutro' directory within the user's home directory.
         If the file exists, it attempts to read the API key from it.
 
         Returns:
@@ -80,7 +80,7 @@ class MaterializedIntelligence:
                 "api_key": "your_api_key_here"
             }
         """
-        CONFIG_DIR = os.path.expanduser("~/.materialized_intelligence")
+        CONFIG_DIR = os.path.expanduser("~/.sutro")
         CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
         if os.path.exists(CONFIG_FILE):
             with open(CONFIG_FILE, "r") as f:
@@ -91,9 +91,9 @@ class MaterializedIntelligence:
 
     def set_api_key(self, api_key: str):
         """
-        Set the API key for the Materialized Intelligence API.
+        Set the API key for the Sutro API.
 
-        This method allows you to set the API key for the Materialized Intelligence API.
+        This method allows you to set the API key for the Sutro API.
         The API key is used to authenticate requests to the API.
 
         Args:
@@ -143,9 +143,9 @@ class MaterializedIntelligence:
 
     def set_base_url(self, base_url: str):
         """
-        Set the base URL for the Materialized Intelligence API.
+        Set the base URL for the Sutro API.
 
-        This method allows you to set the base URL for the Materialized Intelligence API.
+        This method allows you to set the base URL for the Sutro API.
         The base URL is used to authenticate requests to the API.
 
         Args:
@@ -171,7 +171,7 @@ class MaterializedIntelligence:
         """
         Run inference on the provided data.
 
-        This method allows you to run inference on the provided data using the Materialized Intelligence API.
+        This method allows you to run inference on the provided data using the Sutro API.
         It supports various data types such as lists, pandas DataFrames, polars DataFrames, file paths and stages.
 
         Args:
