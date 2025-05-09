@@ -438,7 +438,6 @@ class Sutro:
                     print(f"Heartbeat failed for job {job_id}: {e}")
 
             for _ in range(self.HEARTBEAT_INTERVAL_SECONDS):
-                # Check is_set when possible
                 if stop_event.is_set():
                     break
                 time.sleep(1)
