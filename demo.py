@@ -1,9 +1,8 @@
-import materialized_intelligence as mi
+import sutro as so
 import polars as pl
 from pydantic import BaseModel
 
-mi.set_base_url("https://staging.api.materialized.dev")
-
+so.set_base_url("https://api.sutro.sh")
 
 df = pl.read_parquet("demo_data/sample_1000.parquet")
 
@@ -28,18 +27,10 @@ class AviationClassification(BaseModel):
 #     "required": ["justification", "is_aviation_related"]
 # }
 
-results = mi.infer(
+results = so.infer(
     df,
     column="TITLE",
     system_prompt=system_prompt,
     model="llama-3.1-8b",
     output_schema=AviationClassification,
 )
-
-print(results)
-# results = mi.get_job_results('job-13d33518-3812-45d5-9f48-90128dcad1e4')
-# print(results)
-
-# jobs = mi.list_jobs()
-# for job in jobs:
-#     print(job)
