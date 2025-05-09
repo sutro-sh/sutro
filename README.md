@@ -1,6 +1,6 @@
-# materialized-client
+# sutro-client
 
-The official Python client for Materialized Intelligence. See [docs.materialized.dev](https://docs.materialized.dev/) for more information.
+The official Python client for Sutro. See [docs.sutro.sh](https://docs.sutro.sh/) for more information.
 
 ## Installing Locally (to test changes during development)
 

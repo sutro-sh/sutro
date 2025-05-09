@@ -1,7 +1,7 @@
-from .sdk import MaterializedIntelligence
+from .sdk import Sutro
 
 # Create an instance of the class
-_instance = MaterializedIntelligence()
+_instance = Sutro()
 
 # Import all methods from the instance into the package namespace
 from types import MethodType

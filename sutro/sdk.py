@@ -55,9 +55,9 @@ def to_colored_text(
             return f"{Fore.BLUE}{text}{Style.RESET_ALL}"
 
 
-class MaterializedIntelligence:
+class Sutro:
     def __init__(
-        self, api_key: str = None, base_url: str = "https://api.materialized.dev/"
+        self, api_key: str = None, base_url: str = "https://api.sutro.sh/"
     ):
         self.api_key = api_key or self.check_for_api_key()
         self.base_url = base_url
@@ -68,7 +68,7 @@ class MaterializedIntelligence:
         Check for an API key in the user's home directory.
 
         This method looks for a configuration file named 'config.json' in the
-        '.materialized_intelligence' directory within the user's home directory.
+        '.sutro' directory within the user's home directory.
         If the file exists, it attempts to read the API key from it.
 
         Returns:
@@ -80,7 +80,7 @@ class MaterializedIntelligence:
                 "api_key": "your_api_key_here"
             }
         """
-        CONFIG_DIR = os.path.expanduser("~/.materialized_intelligence")
+        CONFIG_DIR = os.path.expanduser("~/.sutro")
         CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
         if os.path.exists(CONFIG_FILE):
             with open(CONFIG_FILE, "r") as f:
@@ -91,9 +91,9 @@ class MaterializedIntelligence:
 
     def set_api_key(self, api_key: str):
         """
-        Set the API key for the Materialized Intelligence API.
+        Set the API key for the Sutro API.
 
-        This method allows you to set the API key for the Materialized Intelligence API.
+        This method allows you to set the API key for the Sutro API.
         The API key is used to authenticate requests to the API.
 
         Args:
@@ -143,9 +143,9 @@ class MaterializedIntelligence:
 
     def set_base_url(self, base_url: str):
         """
-        Set the base URL for the Materialized Intelligence API.
+        Set the base URL for the Sutro API.
 
-        This method allows you to set the base URL for the Materialized Intelligence API.
+        This method allows you to set the base URL for the Sutro API.
         The base URL is used to authenticate requests to the API.
 
         Args:
@@ -171,7 +171,7 @@ class MaterializedIntelligence:
         """
         Run inference on the provided data.
 
-        This method allows you to run inference on the provided data using the Materialized Intelligence API.
+        This method allows you to run inference on the provided data using the Sutro API.
         It supports various data types such as lists, pandas DataFrames, polars DataFrames, file paths and stages.
 
         Args:
@@ -265,7 +265,7 @@ class MaterializedIntelligence:
                     if not stay_attached:
                         spinner.write(
                             to_colored_text(
-                                f"Use `mi.get_job_status('{job_id}')` to check the status of the job."
+                                f"Use `so.get_job_status('{job_id}')` to check the status of the job."
                             )
                         )
                         return job_id
@@ -353,7 +353,7 @@ class MaterializedIntelligence:
                 if job_results_response.status_code != 200:
                     spinner.write(
                         to_colored_text(
-                            "Job succeeded, but results are not yet available. Use `mi.get_job_results('{job_id}')` to obtain results.",
+                            "Job succeeded, but results are not yet available. Use `so.get_job_results('{job_id}')` to obtain results.",
                             state="fail",
                         )
                     )
@@ -364,7 +364,7 @@ class MaterializedIntelligence:
 
                 spinner.write(
                     to_colored_text(
-                        f"✔ Job results received. You can re-obtain the results with `mi.get_job_results('{job_id}')`",
+                        f"✔ Job results received. You can re-obtain the results with `so.get_job_results('{job_id}')`",
                         state="success",
                     )
                 )
@@ -517,7 +517,7 @@ class MaterializedIntelligence:
                 case "SUCCEEDED":
                     spinner.write(
                         to_colored_text(
-                            f"Job already completed. You can obtain the results with `mi jobs results {job_id}`"
+                            f"Job already completed. You can obtain the results with `sutro jobs results {job_id}`"
                         )
                     )
                     return
@@ -580,7 +580,7 @@ class MaterializedIntelligence:
                 if success:
                     spinner.write(
                         to_colored_text(
-                            f"✔ Job succeeded. Use `mi jobs results {job_id}` to obtain results.",
+                            f"✔ Job succeeded. Use `sutro jobs results {job_id}` to obtain results.",
                             state="success",
                         )
                     )

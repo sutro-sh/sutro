@@ -3,14 +3,14 @@ import click
 from colorama import Fore, Style
 import os
 import json
-from materialized_intelligence.sdk import MaterializedIntelligence
+from sutro.sdk import Sutro
 import polars as pl
 import warnings
 
 warnings.filterwarnings("ignore", category=pl.PolarsInefficientMapWarning)
 pl.Config.set_tbl_hide_dataframe_shape(True)
 
-CONFIG_DIR = os.path.expanduser("~/.materialized_intelligence")
+CONFIG_DIR = os.path.expanduser("~/.sutro")
 CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
 
 
@@ -35,11 +35,11 @@ def check_auth():
 def get_sdk():
     config = load_config()
     if config.get("base_url") != None:
-        return MaterializedIntelligence(
+        return Sutro(
             api_key=config.get("api_key"), base_url=config.get("base_url")
         )
     else:
-        return MaterializedIntelligence(api_key=config.get("api_key"))
+        return Sutro(api_key=config.get("api_key"))
 
 
 def set_config_base_url(base_url: str):
@@ -71,15 +71,16 @@ def set_human_readable_dates(datetime_columns, df):
 @click.group(invoke_without_command=True)
 @click.pass_context
 def cli(ctx):
-    if not check_auth() and ctx.invoked_subcommand != "login":
-        click.echo("Please login using 'mi login'.")
+    # Allow login and set-base-url commands without authentication
+    if not check_auth() and ctx.invoked_subcommand not in ["login", "set-base-url"]:
+        click.echo("Please login using 'sutro login'.")
         ctx.exit(1)
 
     if ctx.invoked_subcommand is None:
         message = """
-Welcome to the Materialized Intelligence CLI! 
+Welcome to the Sutro CLI! 
 
-To see a list of all available commands, use 'mi --help'.
+To see a list of all available commands, use 'sutro --help'.
     """
         click.echo(Fore.GREEN + message + Style.RESET_ALL)
 
@@ -88,10 +89,10 @@ To see a list of all available commands, use 'mi --help'.
 
 @cli.command()
 def login():
-    """Set or update your API key for Materialized Intelligence."""
+    """Set or update your API key for Sutro."""
     config = load_config()
     default_api_key = config.get("api_key", "")
-    default_base_url = config.get("base_url", "https://api.materialized.dev")
+    default_base_url = config.get("base_url", "https://api.sutro.sh")
     click.echo(
         "Hint: An API key is already set. Press Enter to keep the existing key."
         if default_api_key
@@ -111,16 +112,21 @@ def login():
         )
     else:
         ascii = """
-    __  ___      __            _       ___               __   
-   /  |/  /___ _/ /____  _____(_)___ _/ (_)___ ___  ____/ /   
-  / /|_/ / __ `/ __/ _ \/ ___/ / __ `/ / /_  // _ \/ __  /    
- / /  / / /_/ / /_/  __/ /  / / /_/ / / / / //  __/ /_/ /     
-/_/ ____\__,_/___/\___/______/\__,_/_/_/ /___|___/\__,_/      
-   /  _/___  / /____  / / (_)___ ____  ____  ________         
-   / // __ \/ __/ _ \/ / / / __ `/ _ \/ __ \/ ___/ _ \        
- _/ // / / / /_/  __/ / / / /_/ /  __/ / / / /__/  __/        
-/___/_/ /_/\__/\___/_/_/_/\__, /\___/_/ /_/\___/\___/         
-                         /____/                               
+
+ 
+ ▄▄▄▄▄▄▄▄▄▄▄  ▄         ▄  ▄▄▄▄▄▄▄▄▄▄▄  ▄▄▄▄▄▄▄▄▄▄▄  ▄▄▄▄▄▄▄▄▄▄▄ 
+▐░░░░░░░░░░░▌▐░▌       ▐░▌▐░░░░░░░░░░░▌▐░░░░░░░░░░░▌▐░░░░░░░░░░░▌
+▐░█▀▀▀▀▀▀▀▀▀ ▐░▌       ▐░▌ ▀▀▀▀█░█▀▀▀▀ ▐░█▀▀▀▀▀▀▀█░▌▐░█▀▀▀▀▀▀▀█░▌
+▐░▌          ▐░▌       ▐░▌     ▐░▌     ▐░▌       ▐░▌▐░▌       ▐░▌
+▐░█▄▄▄▄▄▄▄▄▄ ▐░▌       ▐░▌     ▐░▌     ▐░█▄▄▄▄▄▄▄█░▌▐░▌       ▐░▌
+▐░░░░░░░░░░░▌▐░▌       ▐░▌     ▐░▌     ▐░░░░░░░░░░░▌▐░▌       ▐░▌
+ ▀▀▀▀▀▀▀▀▀█░▌▐░▌       ▐░▌     ▐░▌     ▐░█▀▀▀▀█░█▀▀ ▐░▌       ▐░▌
+          ▐░▌▐░▌       ▐░▌     ▐░▌     ▐░▌     ▐░▌  ▐░▌       ▐░▌
+ ▄▄▄▄▄▄▄▄▄█░▌▐░█▄▄▄▄▄▄▄█░▌     ▐░▌     ▐░▌      ▐░▌ ▐░█▄▄▄▄▄▄▄█░▌
+▐░░░░░░░░░░░▌▐░░░░░░░░░░░▌     ▐░▌     ▐░▌       ▐░▌▐░░░░░░░░░░░▌
+ ▀▀▀▀▀▀▀▀▀▀▀  ▀▀▀▀▀▀▀▀▀▀▀       ▀       ▀         ▀  ▀▀▀▀▀▀▀▀▀▀▀ 
+                                                                 
+
 """
         click.echo(Fore.BLUE + ascii + Style.RESET_ALL)
         click.echo(
@@ -357,14 +363,14 @@ def download(stage_id, file_name=None, output_path=None):
 
 @cli.command()
 def docs():
-    """Open the Materialized Intelligence API docs."""
-    click.launch("https://docs.materialized.dev")
+    """Open the Sutro API docs."""
+    click.launch("https://docs.sutro.sh")
 
 
 @cli.command()
 @click.argument("base_url")
 def set_base_url(base_url):
-    """Set the base URL for the Materialized Intelligence API."""
+    """Set the base URL for the Sutro API."""
     set_config_base_url(base_url)
     click.echo(Fore.GREEN + f"Base URL set to {base_url}." + Style.RESET_ALL)
 
@@ -385,7 +391,7 @@ def quotas():
         print("\n")
     print(
         Fore.YELLOW
-        + "To increase your quotas, contact us at team@materialized.dev."
+        + "To increase your quotas, contact us at team@sutro.sh."
         + Style.RESET_ALL
     )
 
