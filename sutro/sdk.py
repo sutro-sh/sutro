@@ -265,7 +265,7 @@ class Sutro:
                     if not stay_attached:
                         spinner.write(
                             to_colored_text(
-                                f"Use `mi.get_job_status('{job_id}')` to check the status of the job."
+                                f"Use `so.get_job_status('{job_id}')` to check the status of the job."
                             )
                         )
                         return job_id
@@ -353,7 +353,7 @@ class Sutro:
                 if job_results_response.status_code != 200:
                     spinner.write(
                         to_colored_text(
-                            "Job succeeded, but results are not yet available. Use `mi.get_job_results('{job_id}')` to obtain results.",
+                            "Job succeeded, but results are not yet available. Use `so.get_job_results('{job_id}')` to obtain results.",
                             state="fail",
                         )
                     )
@@ -364,7 +364,7 @@ class Sutro:
 
                 spinner.write(
                     to_colored_text(
-                        f"✔ Job results received. You can re-obtain the results with `mi.get_job_results('{job_id}')`",
+                        f"✔ Job results received. You can re-obtain the results with `so.get_job_results('{job_id}')`",
                         state="success",
                     )
                 )
@@ -517,7 +517,7 @@ class Sutro:
                 case "SUCCEEDED":
                     spinner.write(
                         to_colored_text(
-                            f"Job already completed. You can obtain the results with `mi jobs results {job_id}`"
+                            f"Job already completed. You can obtain the results with `sutro jobs results {job_id}`"
                         )
                     )
                     return
@@ -580,7 +580,7 @@ class Sutro:
                 if success:
                     spinner.write(
                         to_colored_text(
-                            f"✔ Job succeeded. Use `mi jobs results {job_id}` to obtain results.",
+                            f"✔ Job succeeded. Use `sutro jobs results {job_id}` to obtain results.",
                             state="success",
                         )
                     )

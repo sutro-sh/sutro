@@ -3,22 +3,18 @@ import time
 from unittest.mock import patch, MagicMock, mock_open
 import sys
 import io
-import json
-import os
 
 import pandas as pd
 
-# Add these imports from your MaterializedIntelligence class
 from colorama import Fore, Style
 
-from materialized_intelligence import MaterializedIntelligence
-from materialized_intelligence.sdk import to_colored_text
+from sutro import Sutro
+from sutro.sdk import to_colored_text
 
-
-class TestMaterializedIntelligence(unittest.TestCase):
-    def setUp(self):
-        # Create an instance of MaterializedIntelligence with a dummy API key
-        self.mi = MaterializedIntelligence(api_key="test_api_key")
+class TestSutro(unittest.TestCase):
+    def setUp(self):        
+        # Create an instance of Sutro with a dummy API key
+        self.so = Sutro(api_key="test_api_key")
 
         # Setup capture of stdout for testing console output
         self.stdout_capture = io.StringIO()
@@ -41,7 +37,7 @@ class TestMaterializedIntelligence(unittest.TestCase):
         mock_post.return_value = mock_response
 
         # Call the method
-        result = self.mi.infer(["input1", "input2"])
+        result = self.so.infer(["input1", "input2"])
 
         # Check that the API was called correctly
         mock_post.assert_called_once()
@@ -53,7 +49,7 @@ class TestMaterializedIntelligence(unittest.TestCase):
         output = self.stdout_capture.getvalue()
         self.assertIn("✔ Materialized results received", output)
         self.assertIn(
-            f"You can re-obtain the results with `mi.get_job_results('test_job_id')`",
+            f"You can re-obtain the results with `so.get_job_results('test_job_id')`",
             output,
         )
 
@@ -66,7 +62,7 @@ class TestMaterializedIntelligence(unittest.TestCase):
         mock_post.return_value = mock_response
 
         # Call the method
-        result = self.mi.infer(["input1", "input2"])
+        result = self.so.infer(["input1", "input2"])
 
         # Verify the result is None for failed request
         self.assertIsNone(result)
@@ -87,7 +83,7 @@ class TestMaterializedIntelligence(unittest.TestCase):
         mock_get.return_value = mock_response
 
         # Call the method
-        result = self.mi.list_jobs()
+        result = self.so.list_jobs()
 
         # Verify results
         self.assertEqual(result, ["job1", "job2"])
@@ -101,7 +97,7 @@ class TestMaterializedIntelligence(unittest.TestCase):
         mock_get.return_value = mock_response
 
         # Call the method
-        result = self.mi.list_jobs()
+        result = self.so.list_jobs()
 
         # Verify the result is None for failed request
         self.assertIsNone(result)
@@ -119,7 +115,7 @@ class TestMaterializedIntelligence(unittest.TestCase):
         mock_get.return_value = mock_response
 
         # Call the method
-        result = self.mi.get_job_status("test_job_id")
+        result = self.so.get_job_status("test_job_id")
 
         # Verify results
         self.assertEqual(result, "COMPLETED")
@@ -137,7 +133,7 @@ class TestMaterializedIntelligence(unittest.TestCase):
         mock_post.return_value = mock_response
 
         # Call the method
-        result = self.mi.get_job_results("test_job_id")
+        result = self.so.get_job_results("test_job_id")
 
         # Verify results
         self.assertEqual(result, ["result1", "result2"])
@@ -155,7 +151,7 @@ class TestMaterializedIntelligence(unittest.TestCase):
         mock_get.return_value = mock_response
 
         # Call the method
-        result = self.mi.cancel_job("test_job_id")
+        result = self.so.cancel_job("test_job_id")
 
         # Verify results
         self.assertEqual(result, {"status": "CANCELLED"})
@@ -173,7 +169,7 @@ class TestMaterializedIntelligence(unittest.TestCase):
         mock_get.return_value = mock_response
 
         # Call the method
-        result = self.mi.create_stage()
+        result = self.so.create_stage()
 
         # Verify results
         self.assertEqual(result, "test_stage_id")
@@ -187,7 +183,7 @@ class TestMaterializedIntelligence(unittest.TestCase):
     @patch("os.listdir")
     @patch("os.path.basename")
     @patch("builtins.open")
-    @patch("materialized_intelligence.MaterializedIntelligence.create_stage")
+    @patch("sutro.Sutro.create_stage")
     def test_upload_to_stage_success(
         self,
         mock_create_stage,
@@ -209,7 +205,7 @@ class TestMaterializedIntelligence(unittest.TestCase):
         mock_post.return_value = mock_response
 
         # Call the method with single file
-        result = self.mi.upload_to_stage("test_stage_id", "test_file.csv")
+        result = self.so.upload_to_stage("test_stage_id", "test_file.csv")
 
         # Verify results
         self.assertEqual(result, "test_stage_id")
@@ -227,7 +223,7 @@ class TestMaterializedIntelligence(unittest.TestCase):
         mock_post.return_value = mock_response
 
         # Call the method
-        result = self.mi.list_stages()
+        result = self.so.list_stages()
 
         # Verify results
         self.assertEqual(result, ["stage1", "stage2"])
@@ -255,8 +251,8 @@ class TestUserExperience(unittest.TestCase):
     """Tests focused on user-facing behavior and experience"""
 
     def setUp(self):
-        # Create an instance of MaterializedIntelligence with a dummy API key
-        self.mi = MaterializedIntelligence(api_key="test_api_key")
+        # Create an instance of Sutro with a dummy API key
+        self.so = Sutro(api_key="test_api_key")
 
         # Setup capture of stdout for testing console output
         self.stdout_capture = io.StringIO()
@@ -292,7 +288,7 @@ class TestUserExperience(unittest.TestCase):
         mock_post.side_effect = delayed_response
 
         # Call the method
-        self.mi.infer(["input1", "input2"])
+        self.so.infer(["input1", "input2"])
 
         # Check output for progress indicators
         output = self.get_captured_output()
@@ -313,7 +309,7 @@ class TestUserExperience(unittest.TestCase):
         mock_post.return_value = mock_response
 
         # Call the method
-        self.mi.infer(["input1", "input2"])
+        self.so.infer(["input1", "input2"])
 
         # Check output for detailed error information
         output = self.get_captured_output()
@@ -330,12 +326,12 @@ class TestUserExperience(unittest.TestCase):
         df = pd.DataFrame({"data": ["a", "b", "c"]})
 
         with self.assertRaises(ValueError) as context:
-            self.mi.infer(df)
+            self.so.infer(df)
 
         self.assertIn("Column name must be specified", str(context.exception))
 
     @patch("requests.post")
-    @patch.object(MaterializedIntelligence, "create_stage")
+    @patch.object(Sutro, "create_stage")
     @patch("os.path.isdir")
     @patch("os.listdir")
     @patch("builtins.open", new_callable=mock_open, read_data="test data")
@@ -354,7 +350,7 @@ class TestUserExperience(unittest.TestCase):
         mock_post.return_value = mock_response
 
         # Call the method
-        self.mi.upload_to_stage("/fake/directory")
+        self.so.upload_to_stage("/fake/directory")
 
         # Check output for file upload progress indicators
         output = self.get_captured_output()
@@ -373,13 +369,13 @@ class TestUserExperience(unittest.TestCase):
         mock_post.return_value = mock_response
 
         # Call with priority
-        self.mi.infer(["input1"], job_priority=5)
+        self.so.infer(["input1"], job_priority=5)
 
         # Check output contains helpful next steps
         output = self.get_captured_output()
         self.assertIn("Priority 5 Job created with ID", output)
         self.assertIn(
-            "Use `mi.get_job_status('priority_job_123')` to check the status", output
+            "Use `so.get_job_status('priority_job_123')` to check the status", output
         )
 
     @patch("requests.post")
@@ -394,7 +390,7 @@ class TestUserExperience(unittest.TestCase):
         mock_post.return_value = mock_response
 
         # Call with dry run
-        result = self.mi.infer(["input1", "input2"], dry_run=True)
+        result = self.so.infer(["input1", "input2"], dry_run=True)
 
         # Check output
         output = self.get_captured_output()
@@ -415,7 +411,7 @@ class TestUserExperience(unittest.TestCase):
         mock_get.return_value = mock_response
 
         # Call method
-        self.mi.get_job_status("test_job_id")
+        self.so.get_job_status("test_job_id")
 
         # Check output for retry guidance
         output = self.get_captured_output()
@@ -445,7 +441,7 @@ class TestUserExperience(unittest.TestCase):
         mock_post.return_value = mock_response
 
         # Call with schema
-        self.mi.infer(["This product is great!"], json_schema=schema)
+        self.so.infer(["This product is great!"], json_schema=schema)
 
         # Check output for helpful schema validation feedback
         output = self.get_captured_output()
@@ -467,7 +463,7 @@ class TestUserExperience(unittest.TestCase):
         mock_post.return_value = mock_response
 
         # Call with dataframe
-        result_df = self.mi.infer(df, column="text")
+        result_df = self.so.infer(df, column="text")
 
         # Check that results were added to dataframe and user gets feedback
         output = self.get_captured_output()
@@ -482,8 +478,8 @@ class TestColorFormatting(unittest.TestCase):
     """Tests specifically for color formatting in user-facing messages"""
 
     def setUp(self):
-        # Create an instance of MaterializedIntelligence with a dummy API key
-        self.mi = MaterializedIntelligence(api_key="test_api_key")
+        # Create an instance of Sutro with a dummy API key
+        self.so = Sutro(api_key="test_api_key")
 
         # Setup capture of stdout for testing console output
         self.stdout_capture = io.StringIO()
@@ -516,7 +512,7 @@ class TestColorFormatting(unittest.TestCase):
         mock_post.return_value = mock_response
 
         # Call the method
-        self.mi.infer(["input1", "input2"])
+        self.so.infer(["input1", "input2"])
 
         # Get output and check color formatting
         output = self.get_captured_output()
@@ -528,7 +524,7 @@ class TestColorFormatting(unittest.TestCase):
 
         # Job ID reference should be blue (informational)
         self.assert_colored_text_in_output(
-            f"You can re-obtain the results with `mi.get_job_results('test_job_id')`",
+            f"You can re-obtain the results with `so.get_job_results('test_job_id')`",
             Fore.BLUE,
             output,
         )
@@ -543,7 +539,7 @@ class TestColorFormatting(unittest.TestCase):
         mock_post.return_value = mock_response
 
         # Call the method
-        self.mi.infer(["input1", "input2"])
+        self.so.infer(["input1", "input2"])
 
         # Get output and check color formatting
         output = self.get_captured_output()
@@ -568,7 +564,7 @@ class TestColorFormatting(unittest.TestCase):
         mock_get.return_value = mock_response
 
         # Call the method
-        self.mi.get_job_status("test_job_id")
+        self.so.get_job_status("test_job_id")
 
         # Get output and check color formatting
         output = self.get_captured_output()
@@ -592,7 +588,7 @@ class TestColorFormatting(unittest.TestCase):
         ) as mock_listdir, patch("os.path.basename") as mock_basename, patch(
             "builtins.open"
         ) as mock_open, patch.object(
-            MaterializedIntelligence, "create_stage"
+            Sutro, "create_stage"
         ) as mock_create_stage:
             # Configure mocks
             mock_create_stage.return_value = "test_stage_id"
@@ -607,7 +603,7 @@ class TestColorFormatting(unittest.TestCase):
             mock_post.return_value = mock_response
 
             # Call the method
-            self.mi.upload_to_stage("/fake/dir/")
+            self.so.upload_to_stage("/fake/dir/")
 
             # Get output and check color formatting
             output = self.get_captured_output()
@@ -638,7 +634,7 @@ class TestColorFormatting(unittest.TestCase):
         mock_post.return_value = mock_response
 
         # Call with priority
-        self.mi.infer(["input1"], job_priority=2)
+        self.so.infer(["input1"], job_priority=2)
 
         # Get output and check color formatting
         output = self.get_captured_output()
@@ -661,7 +657,7 @@ class TestColorFormatting(unittest.TestCase):
         mock_get.return_value = mock_response
 
         # Call method
-        self.mi.try_authentication("invalid_key")
+        self.so.try_authentication("invalid_key")
 
         # Get output and check color formatting
         output = self.get_captured_output()
@@ -679,13 +675,13 @@ class TestColorFormatting(unittest.TestCase):
 
         # Patch upload_to_stage to handle the exception
         with patch.object(
-            MaterializedIntelligence,
+            Sutro,
             "upload_to_stage",
             side_effect=lambda *a, **kw: print(
                 to_colored_text("Upload failed: Connection error", state="fail")
             ),
         ):
-            self.mi.upload_to_stage("test_stage", "test_file.txt")
+            self.so.upload_to_stage("test_stage", "test_file.txt")
 
         # Get output and check color formatting
         output = self.get_captured_output()
@@ -705,7 +701,7 @@ class TestColorFormatting(unittest.TestCase):
         mock_post.return_value = mock_response
 
         # Call with dry run
-        self.mi.infer(["test"], dry_run=True)
+        self.so.infer(["test"], dry_run=True)
 
         # Get output and check color formatting
         output = self.get_captured_output()
@@ -730,7 +726,7 @@ class TestColorFormatting(unittest.TestCase):
         mock_get.return_value = mock_response
 
         # Call the method
-        self.mi.cancel_job("test_job_id")
+        self.so.cancel_job("test_job_id")
 
         # Get output and check color formatting
         output = self.get_captured_output()
@@ -753,7 +749,7 @@ class TestColorFormatting(unittest.TestCase):
         mock_get.return_value = mock_response
 
         # Call the method
-        self.mi.cancel_job("nonexistent_job")
+        self.so.cancel_job("nonexistent_job")
 
         # Get output and check color formatting
         output = self.get_captured_output()
