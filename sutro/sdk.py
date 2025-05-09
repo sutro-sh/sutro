@@ -462,11 +462,7 @@ class Sutro:
             finally:
                 # Signal stop and cleanup
                 stop_heartbeat.set()
-                # Wait for heartbeat to finish with timeout
-                try:
-                    future.result(timeout=1.0)
-                except TimeoutError:
-                    pass
+                future.result()  # Wait for heartbeat to finish
                 self.unregister_stream_listener(job_id, session_token)
                 session.close()
 
