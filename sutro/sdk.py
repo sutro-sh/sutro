@@ -437,8 +437,10 @@ class Sutro:
                 if not stop_event.is_set():  # Only log if we weren't stopping anyway
                     print(f"Heartbeat failed for job {job_id}: {e}")
 
-            # Use time.sleep instead of asyncio.sleep since this is synchronous
-            time.sleep(self.HEARTBEAT_INTERVAL_SECONDS)
+            for _ in range(self.HEARTBEAT_INTERVAL_SECONDS):
+                if stop_event.is_set():
+                    break
+                time.sleep(1)
 
     @contextmanager
     def stream_heartbeat_session(self, job_id: str, session_token: str) -> Generator[requests.Session, None, None]:
@@ -449,7 +451,7 @@ class Sutro:
         # Run this concurrently in a thread so we can not block main SDK path/behavior
         # but still run heartbeat requests
         with ThreadPoolExecutor(max_workers=1) as executor:
-            future = executor.submit(
+            executor.submit(
                 self.start_heartbeat,
                 job_id,
                 session_token,
@@ -462,7 +464,6 @@ class Sutro:
             finally:
                 # Signal stop and cleanup
                 stop_heartbeat.set()
-                future.result()  # Wait for heartbeat to finish
                 self.unregister_stream_listener(job_id, session_token)
                 session.close()
 
