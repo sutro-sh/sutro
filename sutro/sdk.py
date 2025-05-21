@@ -114,7 +114,7 @@ class Sutro:
                 raise ValueError("Column name must be specified for DataFrame input")
             input_data = data[column].to_list()
         elif isinstance(data, str):
-            if data.startswith("stage-"):
+            if data.startswith("dataset-"):
                 input_data = data + ":" + column
             else:
                 file_ext = os.path.splitext(data)[1].lower()
@@ -172,12 +172,12 @@ class Sutro:
         Run inference on the provided data.
 
         This method allows you to run inference on the provided data using the Sutro API.
-        It supports various data types such as lists, pandas DataFrames, polars DataFrames, file paths and stages.
+        It supports various data types such as lists, pandas DataFrames, polars DataFrames, file paths and datasets.
 
         Args:
             data (Union[List, pd.DataFrame, pl.DataFrame, str]): The data to run inference on.
             model (str, optional): The model to use for inference. Defaults to "llama-3.1-8b".
-            column (str, optional): The column name to use for inference. Required if data is a DataFrame, file path, or stage.
+            column (str, optional): The column name to use for inference. Required if data is a DataFrame, file path, or dataset.
             output_column (str, optional): The column name to store the inference results in if the input is a DataFrame. Defaults to "inference_result".
             job_priority (int, optional): The priority of the job. Defaults to 0.
             output_schema (Union[Dict[str, Any], BaseModel], optional): A structured schema for the output.
@@ -793,22 +793,22 @@ class Sutro:
                 return
         return response.json()
 
-    def create_stage(self):
+    def create_dataset(self):
         """
-        Create a new stage.
+        Create a new dataset.
 
-        This method creates a new stage and returns its ID.
+        This method creates a new empty dataset and returns its ID.
 
         Returns:
-            str: The ID of the new stage.
+            str: The ID of the new dataset.
         """
-        endpoint = f"{self.base_url}/create-stage"
+        endpoint = f"{self.base_url}/create-dataset"
         headers = {
             "Authorization": f"Key {self.api_key}",
             "Content-Type": "application/json",
         }
         with yaspin(
-            SPINNER, text=to_colored_text("Creating stage"), color=YASPIN_COLOR
+            SPINNER, text=to_colored_text("Creating dataset"), color=YASPIN_COLOR
         ) as spinner:
             response = requests.get(endpoint, headers=headers)
             if response.status_code != 200:
@@ -820,25 +820,25 @@ class Sutro:
                 spinner.stop()
                 print(to_colored_text(response.json(), state="fail"))
                 return
-            stage_id = response.json()["stage_id"]
+            dataset_id = response.json()["dataset_id"]
             spinner.write(
-                to_colored_text(f"✔ Stage created with ID: {stage_id}", state="success")
+                to_colored_text(f"✔ Dataset created with ID: {dataset_id}", state="success")
             )
-        return stage_id
+        return dataset_id
 
-    def upload_to_stage(
+    def upload_to_dataset(
         self,
-        stage_id: Union[List[str], str] = None,
+        dataset_id: Union[List[str], str] = None,
         file_paths: Union[List[str], str] = None,
         verify_ssl: bool = True,
     ):
         """
-        Upload data to a stage.
+        Upload data to a dataset.
 
-        This method uploads files to a stage. Accepts a stage ID and file paths. If only a single parameter is provided, it will be interpreted as the file paths.
+        This method uploads files to a dataset. Accepts a dataset ID and file paths. If only a single parameter is provided, it will be interpreted as the file paths.
 
         Args:
-            stage_id (str): The ID of the stage to upload to. If not provided, a new stage will be created.
+            dataset_id (str): The ID of the dataset to upload to. If not provided, a new dataset will be created.
             file_paths (Union[List[str], str]): A list of paths to the files to upload, or a single path to a collection of files.
             verify_ssl (bool): Whether to verify SSL certificates. Set to False to bypass SSL verification for troubleshooting.
 
@@ -846,17 +846,17 @@ class Sutro:
             dict: The response from the API.
         """
         # when only a single parameter is provided, it is interpreted as the file paths
-        if file_paths is None and stage_id is not None:
-            file_paths = stage_id
-            stage_id = None
+        if file_paths is None and dataset_id is not None:
+            file_paths = dataset_id
+            dataset_id = None
 
         if file_paths is None:
             raise ValueError("File paths must be provided")
 
-        if stage_id is None:
-            stage_id = self.create_stage()
+        if dataset_id is None:
+            dataset_id = self.create_dataset()
 
-        endpoint = f"{self.base_url}/upload-to-stage"
+        endpoint = f"{self.base_url}/upload-to-dataset"
 
         if isinstance(file_paths, str):
             # check if the file path is a directory
@@ -871,7 +871,7 @@ class Sutro:
 
         with yaspin(
             SPINNER,
-            text=to_colored_text(f"Uploading files to stage: {stage_id}"),
+            text=to_colored_text(f"Uploading files to dataset: {dataset_id}"),
             color=YASPIN_COLOR,
         ) as spinner:
             count = 0
@@ -887,7 +887,7 @@ class Sutro:
                 }
 
                 payload = {
-                    "stage_id": stage_id,
+                    "dataset_id": dataset_id,
                 }
 
                 headers = {
@@ -896,7 +896,7 @@ class Sutro:
                 count += 1
                 spinner.write(
                     to_colored_text(
-                        f"Uploading file {count}/{len(file_paths)} to stage: {stage_id}"
+                        f"Uploading file {count}/{len(file_paths)} to dataset: {dataset_id}"
                     )
                 )
 
@@ -923,19 +923,19 @@ class Sutro:
 
             spinner.write(
                 to_colored_text(
-                    f"✔ {count} files successfully uploaded to stage", state="success"
+                    f"✔ {count} files successfully uploaded to dataset", state="success"
                 )
             )
-        return stage_id
+        return dataset_id
 
-    def list_stages(self):
-        endpoint = f"{self.base_url}/list-stages"
+    def list_datasets(self):
+        endpoint = f"{self.base_url}/list-datasets"
         headers = {
             "Authorization": f"Key {self.api_key}",
             "Content-Type": "application/json",
         }
         with yaspin(
-            SPINNER, text=to_colored_text("Retrieving stages"), color=YASPIN_COLOR
+            SPINNER, text=to_colored_text("Retrieving datasets"), color=YASPIN_COLOR
         ) as spinner:
             response = requests.post(endpoint, headers=headers)
             if response.status_code != 200:
@@ -946,21 +946,21 @@ class Sutro:
                 )
                 print(to_colored_text(f"Error: {response.json()}", state="fail"))
                 return
-            spinner.write(to_colored_text("✔ Stages retrieved", state="success"))
-        return response.json()["stages"]
+            spinner.write(to_colored_text("✔ Datasets retrieved", state="success"))
+        return response.json()["datasets"]
 
-    def list_stage_files(self, stage_id: str):
-        endpoint = f"{self.base_url}/list-stage-files"
+    def list_dataset_files(self, dataset_id: str):
+        endpoint = f"{self.base_url}/list-dataset-files"
         headers = {
             "Authorization": f"Key {self.api_key}",
             "Content-Type": "application/json",
         }
         payload = {
-            "stage_id": stage_id,
+            "dataset_id": dataset_id,
         }
         with yaspin(
             SPINNER,
-            text=to_colored_text(f"Listing files in stage: {stage_id}"),
+            text=to_colored_text(f"Listing files in dataset: {dataset_id}"),
             color=YASPIN_COLOR,
         ) as spinner:
             response = requests.post(
@@ -975,27 +975,27 @@ class Sutro:
                 print(to_colored_text(f"Error: {response.json()}", state="fail"))
                 return
             spinner.write(
-                to_colored_text(f"✔ Files listed in stage: {stage_id}", state="success")
+                to_colored_text(f"✔ Files listed in dataset: {dataset_id}", state="success")
             )
         return response.json()["files"]
 
-    def download_from_stage(
+    def download_from_dataset(
         self,
-        stage_id: str,
+        dataset_id: str,
         files: Union[List[str], str] = None,
         output_path: str = None,
     ):
-        endpoint = f"{self.base_url}/download-from-stage"
+        endpoint = f"{self.base_url}/download-from-dataset"
 
         if files is None:
-            files = self.list_stage_files(stage_id)
+            files = self.list_dataset_files(dataset_id)
         elif isinstance(files, str):
             files = [files]
 
         if not files:
             print(
                 to_colored_text(
-                    f"Couldn't find files for stage ID: {stage_id}", state="fail"
+                    f"Couldn't find files for dataset ID: {dataset_id}", state="fail"
                 )
             )
             return
@@ -1006,7 +1006,7 @@ class Sutro:
 
         with yaspin(
             SPINNER,
-            text=to_colored_text(f"Downloading files from stage: {stage_id}"),
+            text=to_colored_text(f"Downloading files from dataset: {dataset_id}"),
             color=YASPIN_COLOR,
         ) as spinner:
             count = 0
@@ -1016,11 +1016,11 @@ class Sutro:
                     "Content-Type": "application/json",
                 }
                 payload = {
-                    "stage_id": stage_id,
+                    "dataset_id": dataset_id,
                     "file_name": file,
                 }
                 spinner.text = to_colored_text(
-                    f"Downloading file {count + 1}/{len(files)} from stage: {stage_id}"
+                    f"Downloading file {count + 1}/{len(files)} from dataset: {dataset_id}"
                 )
                 response = requests.post(
                     endpoint, headers=headers, data=json.dumps(payload)
@@ -1039,7 +1039,7 @@ class Sutro:
                 count += 1
             spinner.write(
                 to_colored_text(
-                    f"✔ {count} files successfully downloaded from stage: {stage_id}",
+                    f"✔ {count} files successfully downloaded from dataset: {dataset_id}",
                     state="success",
                 )
             )

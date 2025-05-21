@@ -2,7 +2,7 @@ import sutro as so
 import polars as pl
 from pydantic import BaseModel
 
-so.set_base_url("https://api.sutro.sh")
+so.set_base_url("https://staging.api.sutro.sh")
 
 df = pl.read_parquet("demo_data/sample_1000.parquet")
 
@@ -14,23 +14,24 @@ An example might be Title: "The Future of Aviation" Text: "The future of aviatio
 Another example might be Title: "Haskell is the best programming language" Text: None. This post is not related to aviation, so the answer is False.
 """
 
-class AviationClassification(BaseModel):
-    justification: str
-    is_aviation_related: bool
+# class AviationClassification(BaseModel):
+#     justification: str
+#     is_aviation_related: bool
 
-# json_schema = {
-#     "type": "object",
-#     "properties": {
-#         "justification": {"type": "string"},
-#         "is_aviation_related": {"type": "boolean"},
-#     },
-#     "required": ["justification", "is_aviation_related"]
-# }
+json_schema = {
+    "type": "object",
+    "properties": {"is_aviation_related": {"type": "boolean"}},
+    "required": ["is_aviation_related"],
+}
 
 results = so.infer(
     df,
     column="TITLE",
     system_prompt=system_prompt,
-    model="llama-3.1-8b",
-    output_schema=AviationClassification,
+    model="llama-3.2-3b",
+    job_priority=0,
+    output_schema=json_schema,
 )
+
+# results = so.get_job_results('job-cb6cdc5a-c018-4666-9d8f-fcbc27e482a5')
+print(results)

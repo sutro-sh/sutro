@@ -3,7 +3,7 @@
 build:
 	@echo "Building the project..."
 	rm -rf dist
-	python -m build
+	python3 -m build
 
 install:
 	@echo "Installing the project..."
@@ -12,7 +12,7 @@ install:
 
 upload:
 	@echo "Uploading to PyPI..."
-	python -m twine upload dist/*
+	python3 -m twine upload dist/*
 
 release:
 	@if [ -z "$(filter-out $@,$(MAKECMDGOALS))" ]; then \

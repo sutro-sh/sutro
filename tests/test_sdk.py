@@ -8,13 +8,13 @@ import pandas as pd
 
 from colorama import Fore, Style
 
-from sutro import Sutro
+from sutro.sdk import Sutro
 from sutro.sdk import to_colored_text
 
 class TestSutro(unittest.TestCase):
     def setUp(self):        
         # Create an instance of Sutro with a dummy API key
-        self.so = Sutro(api_key="test_api_key")
+        self.so = Sutro(api_key="test_api_key", base_url="https://staging.api.sutro.sh/")
 
         # Setup capture of stdout for testing console output
         self.stdout_capture = io.StringIO()
@@ -41,6 +41,8 @@ class TestSutro(unittest.TestCase):
 
         # Check that the API was called correctly
         mock_post.assert_called_once()
+
+        print(result, flush=True)
 
         # Verify results
         self.assertEqual(result, ["result1", "result2"])
@@ -161,32 +163,32 @@ class TestSutro(unittest.TestCase):
         self.assertIn("✔ Job cancelled", output)
 
     @patch("requests.get")
-    def test_create_stage_success(self, mock_get):
+    def test_create_dataset_success(self, mock_get):
         # Mock successful response
         mock_response = MagicMock()
         mock_response.status_code = 200
-        mock_response.json.return_value = {"stage_id": "test_stage_id"}
+        mock_response.json.return_value = {"dataset_id": "test_dataset_id"}
         mock_get.return_value = mock_response
 
         # Call the method
-        result = self.so.create_stage()
+        result = self.so.create_dataset()
 
         # Verify results
-        self.assertEqual(result, "test_stage_id")
+        self.assertEqual(result, "test_dataset_id")
 
         # Check output for success message
         output = self.stdout_capture.getvalue()
-        self.assertIn("✔ Stage created with ID: test_stage_id", output)
+        self.assertIn("✔ Dataset created with ID: test_dataset_id", output)
 
     @patch("requests.post")
     @patch("os.path.isdir")
     @patch("os.listdir")
     @patch("os.path.basename")
     @patch("builtins.open")
-    @patch("sutro.Sutro.create_stage")
-    def test_upload_to_stage_success(
+    @patch("sutro.Sutro.create_dataset")
+    def test_upload_to_dataset_success(
         self,
-        mock_create_stage,
+        mock_create_dataset,
         mock_open,
         mock_basename,
         mock_listdir,
@@ -194,7 +196,7 @@ class TestSutro(unittest.TestCase):
         mock_post,
     ):
         # Mock necessary functions
-        mock_create_stage.return_value = "new_stage_id"
+        mock_create_dataset.return_value = "new_dataset_id"
         mock_isdir.return_value = False
         mock_basename.return_value = "test_file.csv"
         mock_open.return_value = MagicMock()
@@ -205,32 +207,32 @@ class TestSutro(unittest.TestCase):
         mock_post.return_value = mock_response
 
         # Call the method with single file
-        result = self.so.upload_to_stage("test_stage_id", "test_file.csv")
+        result = self.so.upload_to_dataset("test_dataset_id", "test_file.csv")
 
         # Verify results
-        self.assertEqual(result, "test_stage_id")
+        self.assertEqual(result, "test_dataset_id")
 
         # Check output for success message
         output = self.stdout_capture.getvalue()
-        self.assertIn("✔ 1 files successfully uploaded to stage", output)
+        self.assertIn("✔ 1 files successfully uploaded to dataset", output)
 
     @patch("requests.post")
-    def test_list_stages_success(self, mock_post):
+    def test_list_datasets_success(self, mock_post):
         # Mock successful response
         mock_response = MagicMock()
         mock_response.status_code = 200
-        mock_response.json.return_value = {"stages": ["stage1", "stage2"]}
+        mock_response.json.return_value = {"datasets": ["dataset1", "dataset2"]}
         mock_post.return_value = mock_response
 
         # Call the method
-        result = self.so.list_stages()
+        result = self.so.list_datasets()
 
         # Verify results
-        self.assertEqual(result, ["stage1", "stage2"])
+        self.assertEqual(result, ["dataset1", "dataset2"])
 
         # Check output for success message
         output = self.stdout_capture.getvalue()
-        self.assertIn("✔ Stages retrieved", output)
+        self.assertIn("✔ Datasets retrieved", output)
 
     # Test for color output formatting
     def test_to_colored_text(self):
@@ -331,18 +333,18 @@ class TestUserExperience(unittest.TestCase):
         self.assertIn("Column name must be specified", str(context.exception))
 
     @patch("requests.post")
-    @patch.object(Sutro, "create_stage")
+    @patch.object(Sutro, "create_dataset")
     @patch("os.path.isdir")
     @patch("os.listdir")
     @patch("builtins.open", new_callable=mock_open, read_data="test data")
     def test_multi_file_upload_progress(
-        self, mock_file, mock_listdir, mock_isdir, mock_create_stage, mock_post
+        self, mock_file, mock_listdir, mock_isdir, mock_create_dataset, mock_post
     ):
         """Test that users see progress during multi-file uploads"""
         # Setup for multiple files
         mock_isdir.return_value = True
         mock_listdir.return_value = ["file1.txt", "file2.txt", "file3.txt"]
-        mock_create_stage.return_value = "test_stage_id"
+        mock_create_dataset.return_value = "test_dataset_id"
 
         # Mock successful response
         mock_response = MagicMock()
@@ -350,7 +352,7 @@ class TestUserExperience(unittest.TestCase):
         mock_post.return_value = mock_response
 
         # Call the method
-        self.so.upload_to_stage("/fake/directory")
+        self.so.upload_to_dataset("/fake/directory")
 
         # Check output for file upload progress indicators
         output = self.get_captured_output()
@@ -580,7 +582,7 @@ class TestColorFormatting(unittest.TestCase):
         )
 
     @patch("requests.post")
-    def test_stage_upload_progress_colors(self, mock_post):
+    def test_dataset_upload_progress_colors(self, mock_post):
         """Test color formatting during file upload progress"""
         # Setup mocks
         with patch("os.path.isdir") as mock_isdir, patch(
@@ -588,10 +590,10 @@ class TestColorFormatting(unittest.TestCase):
         ) as mock_listdir, patch("os.path.basename") as mock_basename, patch(
             "builtins.open"
         ) as mock_open, patch.object(
-            Sutro, "create_stage"
-        ) as mock_create_stage:
+            Sutro, "create_dataset"
+        ) as mock_create_dataset:
             # Configure mocks
-            mock_create_stage.return_value = "test_stage_id"
+            mock_create_dataset.return_value = "test_dataset_id"
             mock_isdir.return_value = True
             mock_listdir.return_value = ["file1.txt", "file2.txt"]
             mock_basename.side_effect = lambda x: x
@@ -603,25 +605,25 @@ class TestColorFormatting(unittest.TestCase):
             mock_post.return_value = mock_response
 
             # Call the method
-            self.so.upload_to_stage("/fake/dir/")
+            self.so.upload_to_dataset("/fake/dir/")
 
             # Get output and check color formatting
             output = self.get_captured_output()
 
             # Progress messages should be blue
             self.assert_colored_text_in_output(
-                "Uploading files to stage: test_stage_id", Fore.BLUE, output
+                "Uploading files to dataset: test_dataset_id", Fore.BLUE, output
             )
             self.assert_colored_text_in_output(
-                "Uploading file 1/2 to stage: test_stage_id", Fore.BLUE, output
+                "Uploading file 1/2 to dataset: test_dataset_id", Fore.BLUE, output
             )
             self.assert_colored_text_in_output(
-                "Uploading file 2/2 to stage: test_stage_id", Fore.BLUE, output
+                "Uploading file 2/2 to dataset: test_dataset_id", Fore.BLUE, output
             )
 
             # Success message should be green
             self.assert_colored_text_in_output(
-                "✔ 2 files successfully uploaded to stage", Fore.GREEN, output
+                "✔ 2 files successfully uploaded to dataset", Fore.GREEN, output
             )
 
     @patch("requests.post")
@@ -673,15 +675,15 @@ class TestColorFormatting(unittest.TestCase):
         # Mock network error
         mock_post.side_effect = Exception("Connection error")
 
-        # Patch upload_to_stage to handle the exception
+        # Patch upload_to_dataset to handle the exception
         with patch.object(
             Sutro,
-            "upload_to_stage",
+            "upload_to_dataset",
             side_effect=lambda *a, **kw: print(
                 to_colored_text("Upload failed: Connection error", state="fail")
             ),
         ):
-            self.so.upload_to_stage("test_stage", "test_file.txt")
+            self.so.upload_to_dataset("test_dataset", "test_file.txt")
 
         # Get output and check color formatting
         output = self.get_captured_output()

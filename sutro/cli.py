@@ -275,34 +275,34 @@ def cancel(job_id):
 
 
 @cli.group()
-def stages():
-    """Manage stages."""
+def datasets():
+    """Manage datasets."""
     pass
 
 
-@stages.command()
+@datasets.command()
 def create():
-    """Create a new stage."""
+    """Create a new dataset."""
     sdk = get_sdk()
-    stage_id = sdk.create_stage()
-    if not stage_id:
+    dataset_id = sdk.create_dataset()
+    if not dataset_id:
         return
     click.echo(
         Fore.GREEN
-        + f"Stage created successfully. Stage ID: {stage_id}"
+        + f"Dataset created successfully. Dataset ID: {dataset_id}"
         + Style.RESET_ALL
     )
 
 
-@stages.command()
+@datasets.command()
 def list():
-    """List all stages."""
+    """List all datasets."""
     sdk = get_sdk()
-    stages = sdk.list_stages()
-    if stages is None or len(stages) == 0:
-        click.echo(Fore.YELLOW + "No stages found." + Style.RESET_ALL)
+    datasets = sdk.list_datasets()
+    if datasets is None or len(datasets) == 0:
+        click.echo(Fore.YELLOW + "No datasets found." + Style.RESET_ALL)
         return
-    df = pl.DataFrame(stages)
+    df = pl.DataFrame(datasets)
 
     df = df.with_columns(
         pl.col("schema")
@@ -319,37 +319,37 @@ def list():
         print(df.select(pl.all()))
 
 
-@stages.command()
-@click.argument("stage_id")
-def files(stage_id):
-    """List all files in a stage."""
+@datasets.command()
+@click.argument("dataset_id")
+def files(dataset_id):
+    """List all files in a dataset."""
     sdk = get_sdk()
-    files = sdk.list_stage_files(stage_id)
+    files = sdk.list_dataset_files(dataset_id)
     if not files:
         return
 
-    print(Fore.YELLOW + "Files in stage " + stage_id + ":" + Style.RESET_ALL)
+    print(Fore.YELLOW + "Files in dataset " + dataset_id + ":" + Style.RESET_ALL)
     for file in files:
         print(f"\t{file}")
 
 
-@stages.command()
-@click.argument("stage_id", required=False)
+@datasets.command()
+@click.argument("dataset_id", required=False)
 @click.argument("file_path")
-def upload(file_path, stage_id):
-    """Upload files to a stage. You can provide a single file path or a directory path to upload all files in the directory."""
+def upload(file_path, dataset_id):
+    """Upload files to a dataset. You can provide a single file path or a directory path to upload all files in the directory."""
     sdk = get_sdk()
-    sdk.upload_to_stage(file_path, stage_id)
+    sdk.upload_to_dataset(file_path, dataset_id)
 
 
-@stages.command()
-@click.argument("stage_id")
+@datasets.command()
+@click.argument("dataset_id")
 @click.argument("file_name", required=False)
 @click.argument("output_path", required=False)
-def download(stage_id, file_name=None, output_path=None):
-    """Download a file/files from a stage. If no files are provided, all files in the stage will be downloaded. If no output path is provided, the file will be saved to the current working directory."""
+def download(dataset_id, file_name=None, output_path=None):
+    """Download a file/files from a dataset. If no files are provided, all files in the dataset will be downloaded. If no output path is provided, the file will be saved to the current working directory."""
     sdk = get_sdk()
-    files = sdk.download_from_stage(stage_id, [file_name], output_path)
+    files = sdk.download_from_dataset(dataset_id, [file_name], output_path)
     if not files:
         return
     for file in files:
