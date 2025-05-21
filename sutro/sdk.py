@@ -797,7 +797,7 @@ class Sutro:
         """
         Create a new dataset.
 
-        This method creates a new dataset and returns its ID.
+        This method creates a new empty dataset and returns its ID.
 
         Returns:
             str: The ID of the new dataset.
