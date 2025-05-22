@@ -30,6 +30,25 @@ def is_jupyter() -> bool:
 YASPIN_COLOR = None if is_jupyter() else "blue"
 SPINNER = Spinners.dots14
 
+# Models available for inference.  Keep in sync with the backend configuration
+# so users get helpful autocompletion when selecting a model.
+ModelOptions = Literal[
+    "llama-3.2-3b",
+    "llama-3.1-8b",
+    "llama-3.3-70b-8k",
+    "llama-3.3-70b-64k",
+    "qwen-qwq-32b-8k",
+    "qwen-3-4b",
+    "qwen-3-32b",
+    "qwen-3-4b-thinking",
+    "qwen-3-32b-thinking",
+    "gemma-3-4b-it",
+    "gemma-3-27b-it-16k",
+    "gemma-3-27b-it-128k",
+    "multilingual-e5-large-instruct",
+    "gte-qwen2-7b-instruct",
+]
+
 
 def to_colored_text(
     text: str, state: Optional[Literal["success", "fail"]] = None
@@ -156,7 +175,7 @@ class Sutro:
     def infer(
         self,
         data: Union[List, pd.DataFrame, pl.DataFrame, str],
-        model: str = "llama-3.1-8b",
+        model: ModelOptions = "llama-3.1-8b",
         column: str = None,
         output_column: str = "inference_result",
         job_priority: int = 0,
@@ -176,7 +195,7 @@ class Sutro:
 
         Args:
             data (Union[List, pd.DataFrame, pl.DataFrame, str]): The data to run inference on.
-            model (str, optional): The model to use for inference. Defaults to "llama-3.1-8b".
+            model (ModelOptions, optional): The model to use for inference. Defaults to "llama-3.1-8b".
             column (str, optional): The column name to use for inference. Required if data is a DataFrame, file path, or dataset.
             output_column (str, optional): The column name to store the inference results in if the input is a DataFrame. Defaults to "inference_result".
             job_priority (int, optional): The priority of the job. Defaults to 0.
