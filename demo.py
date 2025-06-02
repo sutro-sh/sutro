@@ -2,7 +2,7 @@ import sutro as so
 import polars as pl
 from pydantic import BaseModel
 
-so.set_base_url("https://staging.api.sutro.sh")
+so.set_base_url("https://api.sutro.sh")
 
 df = pl.read_parquet("demo_data/sample_1000.parquet")
 
@@ -28,10 +28,10 @@ results = so.infer(
     df,
     column="TITLE",
     system_prompt=system_prompt,
-    model="llama-3.2-3b",
+    model="qwen-3-4b-thinking",
     job_priority=0,
-    output_schema=json_schema,
+    # output_schema=json_schema,
 )
 
-# results = so.get_job_results('job-cb6cdc5a-c018-4666-9d8f-fcbc27e482a5')
+# results = so.get_job_results('job-ad329df9-7853-4dc3-8ef4-1004f3a0a406')
 print(results)
