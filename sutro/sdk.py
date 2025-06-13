@@ -1,6 +1,7 @@
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
+from enum import Enum
 
 import requests
 import pandas as pd
@@ -16,6 +17,31 @@ from tqdm import tqdm
 import time
 from pydantic import BaseModel
 import json
+
+
+class JobStatus(str, Enum):
+    """Job statuses that will be returned by the API & SDK"""
+
+    UNKNOWN = "UNKNOWN"
+    QUEUED = "QUEUED"  # Job is waiting to start
+    STARTING = "STARTING"  # Job is in the process of starting up
+    RUNNING = "RUNNING"  # Job is actively running
+    SUCCEEDED = "SUCCEEDED"  # Job completed successfully
+    CANCELLING = "CANCELLING"  # Job is in the process of being canceled
+    CANCELLED = "CANCELLED"  # Job was canceled by the user
+    FAILED = "FAILED"  # Job failed
+
+    @classmethod
+    def terminal_statuses(cls) -> list["JobStatus"]:
+        return [
+            cls.SUCCEEDED,
+            cls.FAILED,
+            cls.CANCELLING,
+            cls.CANCELLED,
+        ]
+
+    def is_terminal(self) -> bool:
+        return self in self.terminal_statuses()
 
 # Initialize colorama (required for Windows)
 init()
@@ -1172,13 +1198,16 @@ class Sutro:
 
                 spinner.text = to_colored_text(f"Job status is {status} for {job_id}")
 
-                if status == "SUCCEEDED":
+                if status == JobStatus.SUCCEEDED:
                     spinner.write(to_colored_text("Job completed! Retrieving results...", "success"))
                     spinner.stop() # Stop this spinner as `get_job_results` has its own spinner text
                     results = self.get_job_results(job_id)
                     break
-                if status == "FAILED":
+                if status == JobStatus.FAILED:
                     spinner.write(to_colored_text("Job has failed", "fail"))
+                    return None
+                if status == JobStatus.CANCELLED:
+                    spinner.write(to_colored_text("Job has been cancelled"))
                     return None
 
 
