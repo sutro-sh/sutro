@@ -1,6 +1,7 @@
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
+from enum import Enum
 
 import requests
 import pandas as pd
@@ -16,6 +17,31 @@ from tqdm import tqdm
 import time
 from pydantic import BaseModel
 import json
+
+
+class JobStatus(str, Enum):
+    """Job statuses that will be returned by the API & SDK"""
+
+    UNKNOWN = "UNKNOWN"
+    QUEUED = "QUEUED"  # Job is waiting to start
+    STARTING = "STARTING"  # Job is in the process of starting up
+    RUNNING = "RUNNING"  # Job is actively running
+    SUCCEEDED = "SUCCEEDED"  # Job completed successfully
+    CANCELLING = "CANCELLING"  # Job is in the process of being canceled
+    CANCELLED = "CANCELLED"  # Job was canceled by the user
+    FAILED = "FAILED"  # Job failed
+
+    @classmethod
+    def terminal_statuses(cls) -> list["JobStatus"]:
+        return [
+            cls.SUCCEEDED,
+            cls.FAILED,
+            cls.CANCELLING,
+            cls.CANCELLED,
+        ]
+
+    def is_terminal(self) -> bool:
+        return self in self.terminal_statuses()
 
 # Initialize colorama (required for Windows)
 init()
@@ -181,7 +207,7 @@ class Sutro:
         sampling_params: dict = None,
         system_prompt: str = None,
         dry_run: bool = False,
-        stay_attached: bool = False,
+        stay_attached: Optional[bool] = None,
         random_seed_per_input: bool = False,
         truncate_rows: bool = False
     ):
@@ -211,7 +237,7 @@ class Sutro:
 
         """
         input_data = self.handle_data_helper(data, column)
-        stay_attached = stay_attached or job_priority == 0
+        stay_attached = stay_attached if stay_attached is not None else job_priority == 0
 
         # Convert BaseModel to dict if needed
         if output_schema is not None:
@@ -264,7 +290,7 @@ class Sutro:
                 )
                 spinner.stop()
                 print(to_colored_text(response.json(), state="fail"))
-                return
+                return None
             else:
                 if dry_run:
                     spinner.write(
@@ -375,7 +401,7 @@ class Sutro:
                         )
                     )
                     spinner.stop()
-                    return
+                    return None
 
                 results = job_results_response.json()["results"]
 
@@ -401,6 +427,8 @@ class Sutro:
                     return data
 
                 return results
+            return None
+        return None
 
     def register_stream_listener(self, job_id: str) -> str:
         """Register a new stream listener and get a session token."""
@@ -691,6 +719,30 @@ class Sutro:
                 return
         return response.json()["jobs"]
 
+    def _fetch_job_status(self, job_id: str):
+        """
+        Core logic to fetch job status from the API.
+
+        Args:
+            job_id (str): The ID of the job to retrieve the status for.
+
+        Returns:
+            dict: The response JSON from the API.
+
+        Raises:
+            requests.HTTPError: If the API returns a non-200 status code.
+        """
+        endpoint = f"{self.base_url}/job-status/{job_id}"
+        headers = {
+            "Authorization": f"Key {self.api_key}",
+            "Content-Type": "application/json",
+        }
+
+        response = requests.get(endpoint, headers=headers)
+        response.raise_for_status()
+
+        return response.json()["job_status"][job_id]
+
     def get_job_status(self, job_id: str):
         """
         Get the status of a job by its ID.
@@ -703,28 +755,24 @@ class Sutro:
         Returns:
             str: The status of the job.
         """
-        endpoint = f"{self.base_url}/job-status/{job_id}"
-        headers = {
-            "Authorization": f"Key {self.api_key}",
-            "Content-Type": "application/json",
-        }
         with yaspin(
-            SPINNER,
-            text=to_colored_text(f"Checking job status with ID: {job_id}"),
-            color=YASPIN_COLOR,
+                SPINNER,
+                text=to_colored_text(f"Checking job status with ID: {job_id}"),
+                color=YASPIN_COLOR,
         ) as spinner:
-            response = requests.get(endpoint, headers=headers)
-            if response.status_code != 200:
+            try:
+                response_data = self._fetch_job_status(job_id)
+                spinner.write(to_colored_text("✔ Job status retrieved!", state="success"))
+                return response_data["job_status"][job_id]
+            except requests.HTTPError as e:
                 spinner.write(
                     to_colored_text(
-                        f"Bad status code: {response.status_code}", state="fail"
+                        f"Bad status code: {e.response.status_code}", state="fail"
                     )
                 )
                 spinner.stop()
-                print(to_colored_text(response.json(), state="fail"))
-                return
-            spinner.write(to_colored_text("✔ Job status retrieved!", state="success"))
-        return response.json()["job_status"][job_id]
+                print(to_colored_text(e.response.json(), state="fail"))
+                return None
 
     def get_job_results(
         self,
@@ -1113,3 +1161,56 @@ class Sutro:
                 print(to_colored_text(f"Error: {response.json()}", state="fail"))
                 return
         return response.json()["quotas"]
+
+    def await_job_completion(self, job_id: str, timeout: Optional[int] = 7200) -> list | None:
+        """
+        Waits for job completion to occur and then returns the results upon
+        a successful completion.
+
+        Prints out the job's status every 5 seconds.
+
+        Args:
+            job_id (str): The ID of the job to await.
+            timeout (Optional[int]): The max time in seconds the function should wait for job results for. Default is 7200 (2 hours).
+
+        Returns:
+            list: The results of the job.
+        """
+        POLL_INTERVAL = 5
+
+        results = None
+        start_time = time.time()
+        with yaspin(
+                SPINNER, text=to_colored_text("Awaiting job completion"), color=YASPIN_COLOR
+        ) as spinner:
+            while (time.time() - start_time) < timeout:
+                try:
+                    status = self._fetch_job_status(job_id)
+                except requests.HTTPError as e:
+                    spinner.write(
+                        to_colored_text(
+                            f"Bad status code: {e.response.status_code}", state="fail"
+                        )
+                    )
+                    spinner.stop()
+                    print(to_colored_text(e.response.json(), state="fail"))
+                    return None
+
+                spinner.text = to_colored_text(f"Job status is {status} for {job_id}")
+
+                if status == JobStatus.SUCCEEDED:
+                    spinner.write(to_colored_text("Job completed! Retrieving results...", "success"))
+                    spinner.stop() # Stop this spinner as `get_job_results` has its own spinner text
+                    results = self.get_job_results(job_id)
+                    break
+                if status == JobStatus.FAILED:
+                    spinner.write(to_colored_text("Job has failed", "fail"))
+                    return None
+                if status == JobStatus.CANCELLED:
+                    spinner.write(to_colored_text("Job has been cancelled"))
+                    return None
+
+
+                time.sleep(POLL_INTERVAL)
+
+        return results
