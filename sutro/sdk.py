@@ -1141,7 +1141,7 @@ class Sutro:
         Waits for job completion to occur and then returns the results upon
         a successful completion.
 
-        Prints out job status every 5 seconds.
+        Prints out the job's status every 5 seconds.
 
         Args:
             job_id (str): The ID of the job to await.
