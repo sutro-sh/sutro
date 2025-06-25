@@ -266,11 +266,6 @@ class Sutro:
             "random_seed_per_input": random_seed_per_input,
             "truncate_rows": truncate_rows
         }
-        if dry_run:
-            spinner_text = to_colored_text("Retrieving cost estimates...")
-        else:
-            t = f"Creating priority {job_priority} job"
-            spinner_text = to_colored_text(t)
 
         # There are two gotchas with yaspin:
         # 1. Can't use print while in spinner is running
@@ -279,6 +274,8 @@ class Sutro:
         # Terminal size {self._terminal_width} is too small to display spinner with the given settings.
         # https://github.com/pavdmyt/yaspin/blob/9c7430b499ab4611888ece39783a870e4a05fa45/yaspin/core.py#L568-L571
         job_id = None
+        t = f"Creating {'[dry run] ' if dry_run else ''}priority {job_priority} job"
+        spinner_text = to_colored_text(t)
         with yaspin(SPINNER, text=spinner_text, color=YASPIN_COLOR) as spinner:
             response = requests.post(
                 endpoint, data=json.dumps(payload), headers=headers
@@ -292,13 +289,19 @@ class Sutro:
                 print(to_colored_text(response.json(), state="fail"))
                 return None
             else:
+                job_id = response_data["results"]
                 if dry_run:
                     spinner.write(
-                        to_colored_text("✔ Cost estimates retrieved", state="success")
+                        to_colored_text(f"Awaiting cost estimates with job ID: {job_id}. You can safely detach and retrieve the cost estimates later.", state="info")
                     )
-                    return response_data["results"]
+                    spinner.stop()
+                    self.await_job_completion(job_id, obtain_results=False)
+                    cost_estimate = self._get_job_cost_estimate(job_id)
+                    spinner.write(
+                        to_colored_text(f"✔ Cost estimates retrieved for job {job_id}: ${cost_estimate}", state="success")
+                    )
+                    return job_id
                 else:
-                    job_id = response_data["results"]
                     spinner.write(
                         to_colored_text(
                             f"🛠️  Priority {job_priority} Job created with ID: {job_id}",
@@ -315,6 +318,13 @@ class Sutro:
 
         success = False
         if stay_attached and job_id is not None:
+            spinner.write(to_colored_text("Awaiting job start...", "info"))
+            started = self._await_job_start(job_id)
+            if not started:
+                failure_reason = self._get_failure_reason(job_id)
+                spinner.write(to_colored_text(f"Failure reason: {failure_reason['message']}", "fail"))
+                return None
+            
             s = requests.Session()
             payload = {
                 "job_id": job_id,
@@ -718,6 +728,40 @@ class Sutro:
                 print(to_colored_text(response.json(), state="fail"))
                 return
         return response.json()["jobs"]
+
+    def _list_jobs_helper(self):
+        """
+        Helper function to list jobs.
+        """
+        endpoint = f"{self.base_url}/list-jobs"
+        headers = {
+            "Authorization": f"Key {self.api_key}",
+            "Content-Type": "application/json",
+        }
+        response = requests.get(endpoint, headers=headers)
+        if response.status_code != 200:
+            return None
+        return response.json()["jobs"]
+
+    def _get_job_cost_estimate(self, job_id: str):
+        """
+        Get the cost estimate for a job.
+        """
+        all_jobs = self._list_jobs_helper()
+        for job in all_jobs:
+            if job["job_id"] == job_id:
+                return job["cost_estimate"]
+        return None
+    
+    def _get_failure_reason(self, job_id: str):
+        """
+        Get the failure reason for a job.
+        """
+        all_jobs = self._list_jobs_helper()
+        for job in all_jobs:
+            if job["job_id"] == job_id:
+                return job["failure_reason"]
+        return None
 
     def _fetch_job_status(self, job_id: str):
         """
@@ -1162,7 +1206,7 @@ class Sutro:
                 return
         return response.json()["quotas"]
 
-    def await_job_completion(self, job_id: str, timeout: Optional[int] = 7200) -> list | None:
+    def await_job_completion(self, job_id: str, timeout: Optional[int] = 7200, obtain_results: bool = True) -> list | None:
         """
         Waits for job completion to occur and then returns the results upon
         a successful completion.
@@ -1181,7 +1225,7 @@ class Sutro:
         results = None
         start_time = time.time()
         with yaspin(
-                SPINNER, text=to_colored_text("Awaiting job completion"), color=YASPIN_COLOR
+            SPINNER, text=to_colored_text("Awaiting job completion"), color=YASPIN_COLOR
         ) as spinner:
             while (time.time() - start_time) < timeout:
                 try:
@@ -1201,7 +1245,8 @@ class Sutro:
                 if status == JobStatus.SUCCEEDED:
                     spinner.write(to_colored_text("Job completed! Retrieving results...", "success"))
                     spinner.stop() # Stop this spinner as `get_job_results` has its own spinner text
-                    results = self.get_job_results(job_id)
+                    if obtain_results:
+                        results = self.get_job_results(job_id)
                     break
                 if status == JobStatus.FAILED:
                     spinner.write(to_colored_text("Job has failed", "fail"))
@@ -1214,3 +1259,42 @@ class Sutro:
                 time.sleep(POLL_INTERVAL)
 
         return results
+    
+    def _await_job_start(self, job_id: str, timeout: Optional[int] = 7200):
+        """
+        Waits for job start to occur and then returns the results upon
+        a successful start.
+        
+        """
+        POLL_INTERVAL = 5
+
+        start_time = time.time()
+        with yaspin(
+                SPINNER, text=to_colored_text("Awaiting job completion"), color=YASPIN_COLOR
+        ) as spinner:
+            while (time.time() - start_time) < timeout:
+                try:
+                    status = self._fetch_job_status(job_id)
+                except requests.HTTPError as e:
+                    spinner.write(
+                        to_colored_text(
+                            f"Bad status code: {e.response.status_code}", state="fail"
+                        )
+                    )
+                    spinner.stop()
+                    print(to_colored_text(e.response.json(), state="fail"))
+                    return None
+
+                spinner.text = to_colored_text(f"Job status is {status} for {job_id}")
+
+                if status == JobStatus.RUNNING or status == JobStatus.STARTING:
+                    return True
+                if status == JobStatus.FAILED:
+                    return False
+                if status == JobStatus.CANCELLED:
+                    return False
+
+                time.sleep(POLL_INTERVAL)
+
+        return False
+            

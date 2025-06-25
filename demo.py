@@ -1,8 +1,8 @@
 import sutro as so
 import polars as pl
-from pydantic import BaseModel
+# from pydantic import BaseModel
 
-so.set_base_url("https://api.sutro.sh")
+so.set_base_url("https://staging.api.sutro.sh")
 
 df = pl.read_parquet("demo_data/sample_1000.parquet")
 
@@ -18,18 +18,19 @@ Another example might be Title: "Haskell is the best programming language" Text:
 #     justification: str
 #     is_aviation_related: bool
 
-json_schema = {
-    "type": "object",
-    "properties": {"is_aviation_related": {"type": "boolean"}},
-    "required": ["is_aviation_related"],
-}
+# json_schema = {
+#     "type": "object",
+#     "properties": {"is_aviation_related": {"type": "boolean"}},
+#     "required": ["is_aviation_related"],
+# }
 
 results = so.infer(
     df,
     column="TITLE",
     system_prompt=system_prompt,
-    model="qwen-3-4b-thinking",
+    model="llama-3.2-3b",
     job_priority=0,
+    # dry_run=True,
     # output_schema=json_schema,
 )
 
