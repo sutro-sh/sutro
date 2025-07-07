@@ -876,7 +876,15 @@ class Sutro:
         response_data = response.json()
         results_df = pl.DataFrame(response_data["results"])
 
-        results_df = results_df.rename({'outputs': output_column})
+
+        if len(results_df.columns ) == 1:
+            # Default column when API is only returning a list, and we construct the df
+            # from that
+            original_results_column = 'column_0'
+        else:
+            original_results_column = 'outputs'
+
+        results_df = results_df.rename({original_results_column: output_column})
 
         # Ordering inputs col first seems most logical/useful
         column_config = [
@@ -896,13 +904,13 @@ class Sutro:
                 # Convert to polars for consistent handling
                 original_pl = pl.from_pandas(with_original_df)
 
-                combined_df = original_pl.with_columns(results_df[output_column])
+                combined_df = original_pl.with_columns(results_df)
 
                 # Convert back to pandas to match input type
                 return combined_df.to_pandas()
 
             elif isinstance(with_original_df, pl.DataFrame):
-                return with_original_df.with_columns(results_df[output_column])
+                return with_original_df.with_columns(results_df)
 
         # Return pd.DataFrame type when appropriate
         if with_original_df is None and isinstance(with_original_df, pd.DataFrame):
