@@ -314,7 +314,7 @@ class Sutro:
                 else:
                     spinner.write(
                         to_colored_text(
-                            f"🛠️  Priority {job_priority} Job created with ID: {job_id}. Progress can be monitored at {make_clickable_link(f'https://app.sutro.sh/jobs/{job_id}')}!",
+                            f"🛠 Priority {job_priority} Job created with ID: {job_id}.\nProgress can also be monitored at: {make_clickable_link(f'https://app.sutro.sh/jobs/{job_id}')}",
                             state="success",
                         )
                     )
