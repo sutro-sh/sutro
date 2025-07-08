@@ -1239,6 +1239,7 @@ class Sutro:
         with yaspin(
             SPINNER, text=to_colored_text("Awaiting job completion"), color=YASPIN_COLOR
         ) as spinner:
+            spinner.write(to_colored_text(f'Progress can also be monitored at: {make_clickable_link(f'https://app.sutro.sh/jobs/{job_id}')}'))
             while (time.time() - start_time) < timeout:
                 try:
                     status = self._fetch_job_status(job_id)
