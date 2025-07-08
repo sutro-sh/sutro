@@ -819,12 +819,10 @@ class Sutro:
                 return None
 
     def get_job_results(
-            self,
-            job_id: str,
-            include_inputs: bool = False,
-            include_cumulative_logprobs: bool = False,
-            with_original_df: pl.DataFrame | pd.DataFrame = None,
-            output_column: str = "inference_result",
+        self,
+        job_id: str,
+        include_inputs: bool = False,
+        include_cumulative_logprobs: bool = False,
     ):
         """
         Get the results of a job by its ID.
@@ -835,11 +833,9 @@ class Sutro:
             job_id (str): The ID of the job to retrieve the results for.
             include_inputs (bool, optional): Whether to include the inputs in the results. Defaults to False.
             include_cumulative_logprobs (bool, optional): Whether to include the cumulative logprobs in the results. Defaults to False.
-            with_original_df (pd.DataFrame | pl.DataFrame, optional): Original DataFrame to concatenate with results. Defaults to None.
-            output_column (str, optional): Name of the output column. Defaults to "inference_result".
 
         Returns:
-            Union[pl.DataFrame, pd.DataFrame]: The results as a DataFrame. By default, returns polars.DataFrame; when with_original_df is an instance of pandas.DataFrame, returns pandas.DataFrame.
+            list: The results of the job.
         """
         endpoint = f"{self.base_url}/job-results"
         payload = {
@@ -852,14 +848,18 @@ class Sutro:
             "Content-Type": "application/json",
         }
         with yaspin(
-                SPINNER,
-                text=to_colored_text(f"Gathering results from job: {job_id}"),
-                color=YASPIN_COLOR,
+            SPINNER,
+            text=to_colored_text(f"Gathering results from job: {job_id}"),
+            color=YASPIN_COLOR,
         ) as spinner:
             response = requests.post(
                 endpoint, data=json.dumps(payload), headers=headers
             )
-            if response.status_code != 200:
+            if response.status_code == 200:
+                spinner.write(
+                    to_colored_text("✔ Job results retrieved", state="success")
+                )
+            else:
                 spinner.write(
                     to_colored_text(
                         f"Bad status code: {response.status_code}", state="fail"
@@ -867,56 +867,8 @@ class Sutro:
                 )
                 spinner.stop()
                 print(to_colored_text(response.json(), state="fail"))
-                return None
-
-            spinner.write(
-                to_colored_text("✔ Job results retrieved", state="success")
-            )
-
-        response_data = response.json()
-        results_df = pl.DataFrame(response_data["results"])
-
-
-        if len(results_df.columns ) == 1:
-            # Default column when API is only returning a list, and we construct the df
-            # from that
-            original_results_column = 'column_0'
-        else:
-            original_results_column = 'outputs'
-
-        results_df = results_df.rename({original_results_column: output_column})
-
-        # Ordering inputs col first seems most logical/useful
-        column_config = [
-            ('inputs', include_inputs),
-            (output_column, True),
-            ('cumulative_logprobs', include_cumulative_logprobs),
-        ]
-
-        columns_to_keep = [col for col, include in column_config
-                           if include and col in results_df.columns]
-
-        results_df = results_df.select(columns_to_keep)
-
-        # Handle concatenation with original DataFrame
-        if with_original_df is not None:
-            if isinstance(with_original_df, pd.DataFrame):
-                # Convert to polars for consistent handling
-                original_pl = pl.from_pandas(with_original_df)
-
-                combined_df = original_pl.with_columns(results_df)
-
-                # Convert back to pandas to match input type
-                return combined_df.to_pandas()
-
-            elif isinstance(with_original_df, pl.DataFrame):
-                return with_original_df.with_columns(results_df)
-
-        # Return pd.DataFrame type when appropriate
-        if with_original_df is None and isinstance(with_original_df, pd.DataFrame):
-            return results_df.to_pandas()
-
-        return results_df
+                return
+        return response.json()["results"]
 
     def cancel_job(self, job_id: str):
         """
