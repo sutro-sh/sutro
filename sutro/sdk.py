@@ -97,6 +97,16 @@ def to_colored_text(
             # Default to blue for normal/processing states
             return f"{Fore.BLUE}{text}{Style.RESET_ALL}"
 
+# Isn't fully support in all terminals unfortunately. We should switch to Rich
+# at some point, but even Rich links aren't clickable on MacOS Terminal
+def make_clickable_link(url, text=None):
+    """
+    Create a clickable link for terminals that support OSC 8 hyperlinks.
+    Falls back to plain text for terminals that don't support it.
+    """
+    if text is None:
+        text = url
+    return f"\033]8;;{url}\033\\{text}\033]8;;\033\\"
 
 class Sutro:
     def __init__(
@@ -304,7 +314,7 @@ class Sutro:
                 else:
                     spinner.write(
                         to_colored_text(
-                            f"🛠️  Priority {job_priority} Job created with ID: {job_id}",
+                            f"🛠 Priority {job_priority} Job created with ID: {job_id}.",
                             state="success",
                         )
                     )
@@ -312,13 +322,14 @@ class Sutro:
                         spinner.write(
                             to_colored_text(
                                 f"Use `so.get_job_status('{job_id}')` to check the status of the job."
+                                )
                             )
-                        )
                         return job_id
 
         success = False
         if stay_attached and job_id is not None:
-            spinner.write(to_colored_text("Awaiting job start...", "info"))
+            spinner.write(to_colored_text("Awaiting job start...", ))
+            spinner.write(to_colored_text(f'Progress can also be monitored at: {make_clickable_link(f'https://app.sutro.sh/jobs/{job_id}')}'))
             started = self._await_job_start(job_id)
             if not started:
                 failure_reason = self._get_failure_reason(job_id)
@@ -599,6 +610,7 @@ class Sutro:
                     text=to_colored_text("Awaiting status updates..."),
                     color=YASPIN_COLOR,
                 )
+                spinner.write(to_colored_text(f'Progress can also be monitored at: {make_clickable_link(f'https://app.sutro.sh/jobs/{job_id}')}'))
                 spinner.start()
                 for line in streaming_response.iter_lines():
                     if line:
@@ -1275,6 +1287,7 @@ class Sutro:
         with yaspin(
             SPINNER, text=to_colored_text("Awaiting job completion"), color=YASPIN_COLOR
         ) as spinner:
+            spinner.write(to_colored_text(f'Progress can also be monitored at: {make_clickable_link(f'https://app.sutro.sh/jobs/{job_id}')}'))
             while (time.time() - start_time) < timeout:
                 try:
                     status = self._fetch_job_status(job_id)
