@@ -354,6 +354,12 @@ class Sutro:
                     )
                     spinner.start()
 
+                    token_state = {
+                        'input_tokens': 0,
+                        'output_tokens': 0,
+                        'total_tokens_processed_per_second': 0
+                    }
+
                     for line in streaming_response.iter_lines():
                         if line:
                             try:
@@ -376,11 +382,19 @@ class Sutro:
                                     pbar.update(json_obj["result"] - pbar.n)
                                     pbar.refresh()
                                 if json_obj["result"] == len(input_data):
-                                    pbar.close()
                                     success = True
                             elif json_obj["update_type"] == "tokens":
+                                # Update only the values that are present in this update
+                                # Currently, the way the progress stream endpoint is defined,
+                                # its possible to have updates come in that only have 1 or 2 fields
+                                new = {
+                                    k: v for k, v in json_obj.get('result', {}).items()
+                                    if k in token_state and v >= token_state[k]
+                                }
+                                token_state.update(new)
+
                                 if pbar is not None:
-                                    pbar.postfix = f"Input tokens processed: {json_obj['result']['input_tokens']}, Tokens generated: {json_obj['result']['output_tokens']}, Total tokens/s: {json_obj['result'].get('total_tokens_processed_per_second')}"
+                                    pbar.postfix = f"Input tokens processed: {token_state['input_tokens']}, Output tokens generated: {token_state['output_tokens']}, Total tokens/s: {token_state['total_tokens_processed_per_second']}"
                                     pbar.refresh()
 
             except KeyboardInterrupt:
