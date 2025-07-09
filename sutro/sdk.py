@@ -327,6 +327,9 @@ class Sutro:
                             return job_id
         except KeyboardInterrupt:
             pass
+        finally:
+            if spinner:
+                spinner.stop()
 
         success = False
         if stay_attached and job_id is not None:
@@ -341,7 +344,7 @@ class Sutro:
             pbar = None
 
             try:
-                with s.get(
+                with requests.get(
                         f"{self.base_url}/stream-job-progress/{job_id}",
                         headers=headers,
                         stream=True,
@@ -357,7 +360,7 @@ class Sutro:
                     token_state = {
                         'input_tokens': 0,
                         'output_tokens': 0,
-                        'total_tokens_processed_per_second': 0
+                            'total_tokens_processed_per_second': 0
                     }
 
                     for line in streaming_response.iter_lines():
@@ -400,8 +403,12 @@ class Sutro:
             except KeyboardInterrupt:
                 pass
             finally:
+                # Need to clean these up on keyboard exit otherwise it causes
+                # an error
                 if pbar is not None:
                     pbar.close()
+                if spinner is not None:
+                    spinner.stop()
             if success:
                 spinner.text = to_colored_text(
                     "✔ Job succeeded. Obtaining results...", state="success"
@@ -586,6 +593,8 @@ class Sutro:
         finally:
             if pbar:
                 pbar.close()
+            if spinner:
+                spinner.stop()
 
 
 
