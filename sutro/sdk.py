@@ -114,7 +114,6 @@ class Sutro:
     ):
         self.api_key = api_key or self.check_for_api_key()
         self.base_url = base_url
-        self.HEARTBEAT_INTERVAL_SECONDS = 15  # Keep in sync w what the backend expects
 
     def check_for_api_key(self):
         """
@@ -286,45 +285,51 @@ class Sutro:
         job_id = None
         t = f"Creating {'[dry run] ' if dry_run else ''}priority {job_priority} job"
         spinner_text = to_colored_text(t)
-        with yaspin(SPINNER, text=spinner_text, color=YASPIN_COLOR) as spinner:
-            response = requests.post(
-                endpoint, data=json.dumps(payload), headers=headers
-            )
-            response_data = response.json()
-            if response.status_code != 200:
-                spinner.write(
-                    to_colored_text(f"Error: {response.status_code}", state="fail")
+        try:
+            with yaspin(SPINNER, text=spinner_text, color=YASPIN_COLOR) as spinner:
+                response = requests.post(
+                    endpoint, data=json.dumps(payload), headers=headers
                 )
-                spinner.stop()
-                print(to_colored_text(response.json(), state="fail"))
-                return None
-            else:
-                job_id = response_data["results"]
-                if dry_run:
+                response_data = response.json()
+                if response.status_code != 200:
                     spinner.write(
-                        to_colored_text(f"Awaiting cost estimates with job ID: {job_id}. You can safely detach and retrieve the cost estimates later.", state="info")
+                        to_colored_text(f"Error: {response.status_code}", state="fail")
                     )
                     spinner.stop()
-                    self.await_job_completion(job_id, obtain_results=False)
-                    cost_estimate = self._get_job_cost_estimate(job_id)
-                    spinner.write(
-                        to_colored_text(f"✔ Cost estimates retrieved for job {job_id}: ${cost_estimate}", state="success")
-                    )
-                    return job_id
+                    print(to_colored_text(response.json(), state="fail"))
+                    return None
                 else:
-                    spinner.write(
-                        to_colored_text(
-                            f"🛠 Priority {job_priority} Job created with ID: {job_id}.",
-                            state="success",
+                    job_id = response_data["results"]
+                    if dry_run:
+                        spinner.write(
+                            to_colored_text(f"Awaiting cost estimates with job ID: {job_id}. You can safely detach and retrieve the cost estimates later.", state="info")
                         )
-                    )
-                    if not stay_attached:
+                        spinner.stop()
+                        self.await_job_completion(job_id, obtain_results=False)
+                        cost_estimate = self._get_job_cost_estimate(job_id)
+                        spinner.write(
+                            to_colored_text(f"✔ Cost estimates retrieved for job {job_id}: ${cost_estimate}", state="success")
+                        )
+                        return job_id
+                    else:
                         spinner.write(
                             to_colored_text(
-                                f"Use `so.get_job_status('{job_id}')` to check the status of the job."
-                                )
+                                f"🛠 Priority {job_priority} Job created with ID: {job_id}.",
+                                state="success",
                             )
-                        return job_id
+                        )
+                        if not stay_attached:
+                            spinner.write(
+                                to_colored_text(
+                                    f"Use `so.get_job_status('{job_id}')` to check the status of the job."
+                                    )
+                                )
+                            return job_id
+        except KeyboardInterrupt:
+            pass
+        finally:
+            if spinner:
+                spinner.stop()
 
         success = False
         if stay_attached and job_id is not None:
@@ -335,20 +340,12 @@ class Sutro:
                 failure_reason = self._get_failure_reason(job_id)
                 spinner.write(to_colored_text(f"Failure reason: {failure_reason['message']}", "fail"))
                 return None
-            
             s = requests.Session()
-            payload = {
-                "job_id": job_id,
-            }
             pbar = None
 
-            # Register for stream and get session token
-            session_token = self.register_stream_listener(job_id)
-
-            # Use the heartbeat session context manager
-            with self.stream_heartbeat_session(job_id, session_token) as s:
-                with s.get(
-                        f"{self.base_url}/stream-job-progress/{job_id}?request_session_token={session_token}",
+            try:
+                with requests.get(
+                        f"{self.base_url}/stream-job-progress/{job_id}",
                         headers=headers,
                         stream=True,
                 ) as streaming_response:
@@ -359,6 +356,13 @@ class Sutro:
                         color=YASPIN_COLOR,
                     )
                     spinner.start()
+
+                    token_state = {
+                        'input_tokens': 0,
+                        'output_tokens': 0,
+                            'total_tokens_processed_per_second': 0
+                    }
+
                     for line in streaming_response.iter_lines():
                         if line:
                             try:
@@ -381,12 +385,30 @@ class Sutro:
                                     pbar.update(json_obj["result"] - pbar.n)
                                     pbar.refresh()
                                 if json_obj["result"] == len(input_data):
-                                    pbar.close()
                                     success = True
                             elif json_obj["update_type"] == "tokens":
+                                # Update only the values that are present in this update
+                                # Currently, the way the progress stream endpoint is defined,
+                                # its possible to have updates come in that only have 1 or 2 fields
+                                new = {
+                                    k: v for k, v in json_obj.get('result', {}).items()
+                                    if k in token_state and v >= token_state[k]
+                                }
+                                token_state.update(new)
+
                                 if pbar is not None:
-                                    pbar.postfix = f"Input tokens processed: {json_obj['result']['input_tokens']}, Tokens generated: {json_obj['result']['output_tokens']}, Total tokens/s: {json_obj['result'].get('total_tokens_processed_per_second')}"
+                                    pbar.postfix = f"Input tokens processed: {token_state['input_tokens']}, Output tokens generated: {token_state['output_tokens']}, Total tokens/s: {token_state['total_tokens_processed_per_second']}"
                                     pbar.refresh()
+
+            except KeyboardInterrupt:
+                pass
+            finally:
+                # Need to clean these up on keyboard exit otherwise it causes
+                # an error
+                if pbar is not None:
+                    pbar.close()
+                if spinner is not None:
+                    spinner.stop()
             if success:
                 spinner.text = to_colored_text(
                     "✔ Job succeeded. Obtaining results...", state="success"
@@ -451,87 +473,6 @@ class Sutro:
             return None
         return None
 
-    def register_stream_listener(self, job_id: str) -> str:
-        """Register a new stream listener and get a session token."""
-        headers = {
-            "Authorization": f"Key {self.api_key}",
-            "Content-Type": "application/json",
-        }
-        with requests.post(
-                f"{self.base_url}/register-stream-listener/{job_id}",
-                headers=headers,
-        ) as response:
-            response.raise_for_status()
-            data = response.json()
-            return data["request_session_token"]
-
-    # This is a best effort action and is ok if it sometimes doesn't complete etc
-    def unregister_stream_listener(self, job_id: str, session_token: str):
-        """Explicitly unregister a stream listener."""
-        headers = {
-            "Authorization": f"Key {self.api_key}",
-            "Content-Type": "application/json",
-        }
-        with requests.post(
-                f"{self.base_url}/unregister-stream-listener/{job_id}",
-                headers=headers,
-                json={"request_session_token": session_token},
-        ) as response:
-            response.raise_for_status()
-
-    def start_heartbeat(
-            self,
-            job_id: str,
-            session_token: str,
-            session: requests.Session,
-            stop_event: threading.Event
-    ):
-        """Send heartbeats until stopped."""
-        while not stop_event.is_set():
-            try:
-                headers = {
-                    "Authorization": f"Key {self.api_key}",
-                    "Content-Type": "application/json",
-                }
-                response = session.post(
-                    f"{self.base_url}/stream-heartbeat/{job_id}",
-                    headers=headers,
-                    params={"request_session_token": session_token},
-                )
-                response.raise_for_status()
-            except Exception as e:
-                if not stop_event.is_set():  # Only log if we weren't stopping anyway
-                    print(f"Heartbeat failed for job {job_id}: {e}")
-
-            for _ in range(self.HEARTBEAT_INTERVAL_SECONDS):
-                if stop_event.is_set():
-                    break
-                time.sleep(1)
-
-    @contextmanager
-    def stream_heartbeat_session(self, job_id: str, session_token: str) -> Generator[requests.Session, None, None]:
-        """Context manager that handles session registration and heartbeat."""
-        session = requests.Session()
-        stop_heartbeat = threading.Event()
-
-        # Run this concurrently in a thread so we can not block main SDK path/behavior
-        # but still run heartbeat requests
-        with ThreadPoolExecutor(max_workers=1) as executor:
-            executor.submit(
-                self.start_heartbeat,
-                job_id,
-                session_token,
-                session,
-                stop_heartbeat
-            )
-
-            try:
-                yield session
-            finally:
-                # Signal stop and cleanup
-                stop_heartbeat.set()
-                self.unregister_stream_listener(job_id, session_token)
-                session.close()
 
     def attach(self, job_id):
         """
@@ -596,11 +537,9 @@ class Sutro:
         total_rows = job["num_rows"]
         success = False
 
-        session_token = self.register_stream_listener(job_id)
-
-        with self.stream_heartbeat_session(job_id, session_token) as s:
+        try:
             with s.get(
-                    f"{self.base_url}/stream-job-progress/{job_id}?request_session_token={session_token}",
+                    f"{self.base_url}/stream-job-progress/{job_id}",
                     headers=headers,
                     stream=True,
             ) as streaming_response:
@@ -649,6 +588,13 @@ class Sutro:
                         )
                     )
                     spinner.stop()
+        except KeyboardInterrupt:
+            pass
+        finally:
+            if pbar:
+                pbar.close()
+            if spinner:
+                spinner.stop()
 
 
 
