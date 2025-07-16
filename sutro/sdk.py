@@ -205,60 +205,22 @@ class Sutro:
         """
         self.base_url = base_url
 
-    def infer(
+    def _run_one_batch_inference(
         self,
         data: Union[List, pd.DataFrame, pl.DataFrame, str],
-        model: ModelOptions = "llama-3.1-8b",
-        column: str = None,
-        output_column: str = "inference_result",
-        job_priority: int = 0,
-        output_schema: Union[Dict[str, Any], BaseModel] = None,
-        sampling_params: dict = None,
-        system_prompt: str = None,
-        dry_run: bool = False,
-        stay_attached: Optional[bool] = None,
-        random_seed_per_input: bool = False,
-        truncate_rows: bool = False
+        model: ModelOptions,
+        column: str,
+        output_column: str,
+        job_priority: int,
+        json_schema: Dict[str, Any],
+        sampling_params: dict,
+        system_prompt: str,
+        dry_run: bool,
+        stay_attached: Optional[bool],
+        random_seed_per_input: bool,
+        truncate_rows: bool
     ):
-        """
-        Run inference on the provided data.
-
-        This method allows you to run inference on the provided data using the Sutro API.
-        It supports various data types such as lists, pandas DataFrames, polars DataFrames, file paths and datasets.
-
-        Args:
-            data (Union[List, pd.DataFrame, pl.DataFrame, str]): The data to run inference on.
-            model (ModelOptions, optional): The model to use for inference. Defaults to "llama-3.1-8b".
-            column (str, optional): The column name to use for inference. Required if data is a DataFrame, file path, or dataset.
-            output_column (str, optional): The column name to store the inference results in if the input is a DataFrame. Defaults to "inference_result".
-            job_priority (int, optional): The priority of the job. Defaults to 0.
-            output_schema (Union[Dict[str, Any], BaseModel], optional): A structured schema for the output.
-                Can be either a dictionary representing a JSON schema or a pydantic BaseModel. Defaults to None.
-            sampling_params: (dict, optional): The sampling parameters to use at generation time, ie temperature, top_p etc.
-            system_prompt (str, optional): A system prompt to add to all inputs. This allows you to define the behavior of the model. Defaults to None.
-            dry_run (bool, optional): If True, the method will return cost estimates instead of running inference. Defaults to False.
-            stay_attached (bool, optional): If True, the method will stay attached to the job until it is complete. Defaults to True for prototyping jobs, False otherwise.
-            random_seed_per_input (bool, optional): If True, the method will use a different random seed for each input. Defaults to False.
-            truncate_rows (bool, optional): If True, any rows that have a token count exceeding the context window length of the selected model will be truncated to the max length that will fit within the context window. Defaults to False.
-
-        Returns:
-            Union[List, pd.DataFrame, pl.DataFrame, str]: The results of the inference.
-
-        """
         input_data = self.handle_data_helper(data, column)
-        stay_attached = stay_attached if stay_attached is not None else job_priority == 0
-
-        # Convert BaseModel to dict if needed
-        if output_schema is not None:
-            if hasattr(output_schema, 'model_json_schema'):  # Check for pydantic Model interface
-                json_schema = output_schema.model_json_schema()
-            elif isinstance(output_schema, dict):
-                json_schema = output_schema
-            else:
-                raise ValueError("Invalid output schema type. Must be a dictionary or a pydantic Model.")
-        else:
-            json_schema = None
-
         endpoint = f"{self.base_url}/batch-inference"
         headers = {
             "Authorization": f"Key {self.api_key}",
@@ -319,9 +281,10 @@ class Sutro:
                             )
                         )
                         if not stay_attached:
+                            clickable_link = make_clickable_link(f'https://app.sutro.sh/jobs/{job_id}')
                             spinner.write(
                                 to_colored_text(
-                                    f"Use `so.get_job_status('{job_id}')` to check the status of the job."
+                                    f"Use `so.get_job_status('{job_id}')` to check the status of the job, or monitor progress at {clickable_link}"
                                     )
                                 )
                             return job_id
@@ -473,6 +436,82 @@ class Sutro:
                 return results
             return None
         return None
+
+    def infer(
+        self,
+        data: Union[List, pd.DataFrame, pl.DataFrame, str],
+        model: Union[ModelOptions, List[ModelOptions]] = "llama-3.1-8b",
+        column: str = None,
+        output_column: str = "inference_result",
+        job_priority: int = 0,
+        output_schema: Union[Dict[str, Any], BaseModel] = None,
+        sampling_params: dict = None,
+        system_prompt: str = None,
+        dry_run: bool = False,
+        stay_attached: Optional[bool] = None,
+        random_seed_per_input: bool = False,
+        truncate_rows: bool = False
+    ):
+        """
+        Run inference on the provided data.
+
+        This method allows you to run inference on the provided data using the Sutro API.
+        It supports various data types such as lists, pandas DataFrames, polars DataFrames, file paths and datasets.
+
+        Args:
+            data (Union[List, pd.DataFrame, pl.DataFrame, str]): The data to run inference on.
+            model (Union[ModelOptions, List[ModelOptions]], optional): The model(s) to use for inference. Defaults to "llama-3.1-8b". You can pass a single model or a list of models. In the case of a list, the inference will be run in parallel for each model and stay_attached will be set to False.
+            column (str, optional): The column name to use for inference. Required if data is a DataFrame, file path, or dataset.
+            output_column (str, optional): The column name to store the inference results in if the input is a DataFrame. Defaults to "inference_result".
+            job_priority (int, optional): The priority of the job. Defaults to 0.
+            output_schema (Union[Dict[str, Any], BaseModel], optional): A structured schema for the output.
+                Can be either a dictionary representing a JSON schema or a pydantic BaseModel. Defaults to None.
+            sampling_params: (dict, optional): The sampling parameters to use at generation time, ie temperature, top_p etc.
+            system_prompt (str, optional): A system prompt to add to all inputs. This allows you to define the behavior of the model. Defaults to None.
+            dry_run (bool, optional): If True, the method will return cost estimates instead of running inference. Defaults to False.
+            stay_attached (bool, optional): If True, the method will stay attached to the job until it is complete. Defaults to True for prototyping jobs, False otherwise.
+            random_seed_per_input (bool, optional): If True, the method will use a different random seed for each input. Defaults to False.
+            truncate_rows (bool, optional): If True, any rows that have a token count exceeding the context window length of the selected model will be truncated to the max length that will fit within the context window. Defaults to False.
+
+        Returns:
+            Union[List, pd.DataFrame, pl.DataFrame, str]: The results of the inference.
+
+        """
+        if isinstance(model, list) == False:
+            model_list = [model]
+            stay_attached = stay_attached if stay_attached is not None else job_priority == 0
+        else:
+            model_list = model
+            stay_attached = False
+
+        # Convert BaseModel to dict if needed
+        if output_schema is not None:
+            if hasattr(output_schema, 'model_json_schema'):  # Check for pydantic Model interface
+                json_schema = output_schema.model_json_schema()
+            elif isinstance(output_schema, dict):
+                json_schema = output_schema
+            else:
+                raise ValueError("Invalid output schema type. Must be a dictionary or a pydantic Model.")
+        else:
+            json_schema = None
+
+        for model in model_list:
+            res = self._run_one_batch_inference(
+                data,
+                model,
+                column,
+                output_column,
+                job_priority,
+                json_schema,
+                sampling_params,
+                system_prompt,
+                dry_run,
+                stay_attached,
+                random_seed_per_input,
+                truncate_rows
+            )
+            if stay_attached:
+                return res
 
 
     def attach(self, job_id):
