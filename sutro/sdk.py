@@ -334,7 +334,8 @@ class Sutro:
         success = False
         if stay_attached and job_id is not None:
             spinner.write(to_colored_text("Awaiting job start...", ))
-            spinner.write(to_colored_text(f'Progress can also be monitored at: {make_clickable_link(f'https://app.sutro.sh/jobs/{job_id}')}'))
+            clickable_link = make_clickable_link(f'https://app.sutro.sh/jobs/{job_id}')
+            spinner.write(to_colored_text(f'Progress can also be monitored at: {clickable_link}'))
             started = self._await_job_start(job_id)
             if not started:
                 failure_reason = self._get_failure_reason(job_id)
@@ -549,7 +550,8 @@ class Sutro:
                     text=to_colored_text("Awaiting status updates..."),
                     color=YASPIN_COLOR,
                 )
-                spinner.write(to_colored_text(f'Progress can also be monitored at: {make_clickable_link(f'https://app.sutro.sh/jobs/{job_id}')}'))
+                clickable_link = make_clickable_link(f'https://app.sutro.sh/jobs/{job_id}')
+                spinner.write(to_colored_text(f'Progress can also be monitored at: {clickable_link}'))
                 spinner.start()
                 for line in streaming_response.iter_lines():
                     if line:
@@ -1233,7 +1235,8 @@ class Sutro:
         with yaspin(
             SPINNER, text=to_colored_text("Awaiting job completion"), color=YASPIN_COLOR
         ) as spinner:
-            spinner.write(to_colored_text(f'Progress can also be monitored at: {make_clickable_link(f'https://app.sutro.sh/jobs/{job_id}')}'))
+            clickable_link = make_clickable_link(f'https://app.sutro.sh/jobs/{job_id}')
+            spinner.write(to_colored_text(f'Progress can also be monitored at: {clickable_link}'))
             while (time.time() - start_time) < timeout:
                 try:
                     status = self._fetch_job_status(job_id)
