@@ -410,7 +410,7 @@ class Sutro:
                     spinner.stop()
                     return None
 
-                results = job_results_response.json()["results"]
+                results = job_results_response.json()["results"]["outputs"]
 
                 spinner.write(
                     to_colored_text(
@@ -421,12 +421,6 @@ class Sutro:
                 spinner.stop()
 
                 if isinstance(data, (pd.DataFrame, pl.DataFrame)):
-                    sample_n = 1 if sampling_params is None else sampling_params["n"]
-                    if sample_n > 1:
-                        results = [
-                            results[i : i + sample_n]
-                            for i in range(0, len(results), sample_n)
-                        ]
                     if isinstance(data, pd.DataFrame):
                         data[output_column] = results
                     elif isinstance(data, pl.DataFrame):
