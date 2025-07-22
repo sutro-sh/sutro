@@ -875,15 +875,7 @@ class Sutro:
         response_data = response.json()
         results_df = pl.DataFrame(response_data["results"])
 
-
-        if len(results_df.columns ) == 1:
-            # Default column when API is only returning a list, and we construct the df
-            # from that
-            original_results_column = 'column_0'
-        else:
-            original_results_column = 'outputs'
-
-        results_df = results_df.rename({original_results_column: output_column})
+        results_df = results_df.rename({'outputs': output_column})
 
         # Ordering inputs col first seems most logical/useful
         column_config = [
