@@ -28,7 +28,7 @@ results = so.infer(
     df,
     column="TITLE",
     system_prompt=system_prompt,
-    model="llama-3.2-3b",
+    model="qwen-3-4b-base",
     job_priority=0,
     # dry_run=True,
     # output_schema=json_schema,
