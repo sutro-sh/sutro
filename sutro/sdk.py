@@ -215,7 +215,7 @@ class Sutro:
         output_schema: Union[Dict[str, Any], BaseModel] = None,
         sampling_params: dict = None,
         system_prompt: str = None,
-        dry_run: bool = False,
+        cost_estimate: bool = False,
         stay_attached: Optional[bool] = None,
         random_seed_per_input: bool = False,
         truncate_rows: bool = False
@@ -236,7 +236,7 @@ class Sutro:
                 Can be either a dictionary representing a JSON schema or a pydantic BaseModel. Defaults to None.
             sampling_params: (dict, optional): The sampling parameters to use at generation time, ie temperature, top_p etc.
             system_prompt (str, optional): A system prompt to add to all inputs. This allows you to define the behavior of the model. Defaults to None.
-            dry_run (bool, optional): If True, the method will return cost estimates instead of running inference. Defaults to False.
+            cost_estimate (bool, optional): If True, the method will return cost estimates instead of running inference. Defaults to False.
             stay_attached (bool, optional): If True, the method will stay attached to the job until it is complete. Defaults to True for prototyping jobs, False otherwise.
             random_seed_per_input (bool, optional): If True, the method will use a different random seed for each input. Defaults to False.
             truncate_rows (bool, optional): If True, any rows that have a token count exceeding the context window length of the selected model will be truncated to the max length that will fit within the context window. Defaults to False.
@@ -270,7 +270,7 @@ class Sutro:
             "job_priority": job_priority,
             "json_schema": json_schema,
             "system_prompt": system_prompt,
-            "dry_run": dry_run,
+            "cost_estimate": cost_estimate,
             "sampling_params": sampling_params,
             "random_seed_per_input": random_seed_per_input,
             "truncate_rows": truncate_rows
@@ -283,7 +283,7 @@ class Sutro:
         # Terminal size {self._terminal_width} is too small to display spinner with the given settings.
         # https://github.com/pavdmyt/yaspin/blob/9c7430b499ab4611888ece39783a870e4a05fa45/yaspin/core.py#L568-L571
         job_id = None
-        t = f"Creating {'[dry run] ' if dry_run else ''}priority {job_priority} job"
+        t = f"Creating {'[cost estimate] ' if cost_estimate else ''}priority {job_priority} job"
         spinner_text = to_colored_text(t)
         try:
             with yaspin(SPINNER, text=spinner_text, color=YASPIN_COLOR) as spinner:
@@ -300,12 +300,12 @@ class Sutro:
                     return None
                 else:
                     job_id = response_data["results"]
-                    if dry_run:
+                    if cost_estimate:
                         spinner.write(
-                            to_colored_text(f"Awaiting cost estimates with job ID: {job_id}. You can safely detach and retrieve the cost estimates later.", state="info")
+                            to_colored_text(f"Awaiting cost estimates with job ID: {job_id}. You can safely detach and retrieve the cost estimates later.")
                         )
                         spinner.stop()
-                        self.await_job_completion(job_id, obtain_results=False)
+                        self.await_job_completion(job_id, obtain_results=False, is_cost_estimate=True)
                         cost_estimate = self._get_job_cost_estimate(job_id)
                         spinner.write(
                             to_colored_text(f"✔ Cost estimates retrieved for job {job_id}: ${cost_estimate}", state="success")
@@ -498,20 +498,8 @@ class Sutro:
                 text=to_colored_text("Looking for job..."),
                 color=YASPIN_COLOR,
         ) as spinner:
-            # Get job information from list-jobs endpoint
-            # TODO(cooper) we should add a get jobs endpoint:
-            # GET /jobs/{job_id}
-            jobs_response = s.get(
-                f"{self.base_url}/list-jobs",
-                headers=headers
-            )
-            jobs_response.raise_for_status()
-
-            # Find the specific job we want to attach to
-            job = next(
-                (job for job in jobs_response.json()["jobs"] if job["job_id"] == job_id),
-                None
-            )
+            # Fetch the specific job we want to attach to
+            job = self._fetch_job(job_id)
 
             if not job:
                 spinner.write(to_colored_text(f"Job {job_id} not found", state="fail"))
@@ -691,7 +679,7 @@ class Sutro:
         """
         Helper function to list jobs.
         """
-        endpoint = f"{self.base_url}/list-jobs"
+        endpoint = f"{self.base_url}/list-jobs˚"
         headers = {
             "Authorization": f"Key {self.api_key}",
             "Content-Type": "application/json",
@@ -701,25 +689,38 @@ class Sutro:
             return None
         return response.json()["jobs"]
 
+    def _fetch_job(self, job_id):
+        """
+        Helper function to fetch a single job.
+        """
+        endpoint = f"{self.base_url}/jobs/{job_id}"
+        headers = {
+            "Authorization": f"Key {self.api_key}",
+            "Content-Type": "application/json",
+        }
+        response = requests.get(endpoint, headers=headers)
+        if response.status_code != 200:
+            return None
+        return response.json().get('job')
+
     def _get_job_cost_estimate(self, job_id: str):
         """
         Get the cost estimate for a job.
         """
-        all_jobs = self._list_jobs_helper()
-        for job in all_jobs:
-            if job["job_id"] == job_id:
-                return job["cost_estimate"]
-        return None
+        job = self._fetch_job(job_id)
+        if not job:
+            return None
+
+        return job.get('cost_estimate')
     
     def _get_failure_reason(self, job_id: str):
         """
         Get the failure reason for a job.
         """
-        all_jobs = self._list_jobs_helper()
-        for job in all_jobs:
-            if job["job_id"] == job_id:
-                return job["failure_reason"]
-        return None
+        job = self._fetch_job(job_id)
+        if not job:
+            return None
+        return job.get('failure_reason')
 
     def _fetch_job_status(self, job_id: str):
         """
@@ -1212,7 +1213,7 @@ class Sutro:
                 return
         return response.json()["quotas"]
 
-    def await_job_completion(self, job_id: str, timeout: Optional[int] = 7200, obtain_results: bool = True) -> list | None:
+    def await_job_completion(self, job_id: str, timeout: Optional[int] = 7200, obtain_results: bool = True, is_cost_estimate: bool=False) -> list | None:
         """
         Waits for job completion to occur and then returns the results upon
         a successful completion.
@@ -1233,7 +1234,8 @@ class Sutro:
         with yaspin(
             SPINNER, text=to_colored_text("Awaiting job completion"), color=YASPIN_COLOR
         ) as spinner:
-            spinner.write(to_colored_text(f'Progress can also be monitored at: {make_clickable_link(f'https://app.sutro.sh/jobs/{job_id}')}'))
+            if not is_cost_estimate:
+                spinner.write(to_colored_text(f'Progress can also be monitored at: {make_clickable_link(f'https://app.sutro.sh/jobs/{job_id}')}'))
             while (time.time() - start_time) < timeout:
                 try:
                     status = self._fetch_job_status(job_id)
@@ -1250,9 +1252,9 @@ class Sutro:
                 spinner.text = to_colored_text(f"Job status is {status} for {job_id}")
 
                 if status == JobStatus.SUCCEEDED:
-                    spinner.write(to_colored_text("Job completed! Retrieving results...", "success"))
                     spinner.stop() # Stop this spinner as `get_job_results` has its own spinner text
                     if obtain_results:
+                        spinner.write(to_colored_text("Job completed! Retrieving results...", "success"))
                         results = self.get_job_results(job_id)
                     break
                 if status == JobStatus.FAILED:
