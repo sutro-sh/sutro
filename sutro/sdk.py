@@ -441,7 +441,7 @@ class Sutro:
         output_schema: Union[Dict[str, Any], BaseModel] = None,
         sampling_params: dict = None,
         system_prompt: str = None,
-        dry_run: bool = False,
+        cost_estimate: bool = False,
         stay_attached: Optional[bool] = None,
         random_seed_per_input: bool = False,
         truncate_rows: bool = False
@@ -462,7 +462,7 @@ class Sutro:
                 Can be either a dictionary representing a JSON schema or a pydantic BaseModel. Defaults to None.
             sampling_params: (dict, optional): The sampling parameters to use at generation time, ie temperature, top_p etc.
             system_prompt (str, optional): A system prompt to add to all inputs. This allows you to define the behavior of the model. Defaults to None.
-            dry_run (bool, optional): If True, the method will return cost estimates instead of running inference. Defaults to False.
+            cost_estimate (bool, optional): If True, the method will return cost estimates instead of running inference. Defaults to False.
             stay_attached (bool, optional): If True, the method will stay attached to the job until it is complete. Defaults to True for prototyping jobs, False otherwise.
             random_seed_per_input (bool, optional): If True, the method will use a different random seed for each input. Defaults to False.
             truncate_rows (bool, optional): If True, any rows that have a token count exceeding the context window length of the selected model will be truncated to the max length that will fit within the context window. Defaults to False.
@@ -499,7 +499,7 @@ class Sutro:
                 json_schema,
                 sampling_params,
                 system_prompt,
-                dry_run,
+                cost_estimate,
                 stay_attached,
                 random_seed_per_input,
                 truncate_rows
