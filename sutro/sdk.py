@@ -439,7 +439,7 @@ class Sutro:
         output_column: str = "inference_result",
         job_priority: int = 0,
         output_schema: Union[Dict[str, Any], BaseModel] = None,
-        sampling_params: dict = {},
+        sampling_params: dict = None,
         system_prompt: str = None,
         dry_run: bool = False,
         stay_attached: Optional[bool] = None,
