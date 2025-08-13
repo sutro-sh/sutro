@@ -845,9 +845,8 @@ class Sutro:
         contains_expected_columns = False
         if os.path.exists(file_path):
             num_columns = pq.read_table(file_path).num_columns
-            if num_columns == expected_num_columns:
-                contains_expected_columns = True
-                
+            contains_expected_columns = num_columns == expected_num_columns
+        
         if disable_cache == False and contains_expected_columns:
             with yaspin(
                 SPINNER,
@@ -868,9 +867,9 @@ class Sutro:
                 "Content-Type": "application/json",
             }
             with yaspin(
-                    SPINNER,
-                    text=to_colored_text(f"Gathering results from job: {job_id}"),
-                    color=YASPIN_COLOR,
+                SPINNER,
+                text=to_colored_text(f"Gathering results from job: {job_id}"),
+                color=YASPIN_COLOR,
             ) as spinner:
                 response = requests.post(
                     endpoint, data=json.dumps(payload), headers=headers
