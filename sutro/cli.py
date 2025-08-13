@@ -141,7 +141,6 @@ def jobs():
     """Manage jobs."""
     pass
 
-
 @jobs.command()
 @click.option(
     "--all", is_flag=True, help="Include all jobs, including cancelled and failed ones."
@@ -360,6 +359,24 @@ def download(dataset_id, file_name=None, output_path=None):
             with open(output_path + "/" + file_name, "wb") as f:
                 f.write(file)
 
+@cli.group()
+def cache():
+    """Manage the local job results cache."""
+    pass
+
+@cache.command()
+def clear():
+    """Clear the local job results cache."""
+    sdk = get_sdk()
+    sdk._clear_job_results_cache()
+    click.echo(Fore.GREEN + "Job results cache cleared." + Style.RESET_ALL)
+
+@cache.command()
+def show():
+    """Show the contents and size of the job results cache."""
+    sdk = get_sdk()
+    sdk._show_cache_contents()
+
 
 @cli.command()
 def docs():
@@ -394,6 +411,7 @@ def quotas():
         + "To increase your quotas, contact us at team@sutro.sh."
         + Style.RESET_ALL
     )
+
 
 @jobs.command()
 @click.argument("job_id", required=False)
