@@ -815,13 +815,14 @@ class Sutro:
                 return None
 
     def get_job_results(
-            self,
-            job_id: str,
-            include_inputs: bool = False,
-            include_cumulative_logprobs: bool = False,
-            with_original_df: pl.DataFrame | pd.DataFrame = None,
-            output_column: str = "inference_result",
-            disable_cache: bool = False
+        self,
+        job_id: str,
+        include_inputs: bool = False,
+        include_cumulative_logprobs: bool = False,
+        with_original_df: pl.DataFrame | pd.DataFrame = None,
+        output_column: str = "inference_result",
+        disable_cache: bool = False,
+        unpack_json: bool = True,
     ):
         """
         Get the results of a job by its ID.
@@ -834,6 +835,8 @@ class Sutro:
             include_cumulative_logprobs (bool, optional): Whether to include the cumulative logprobs in the results. Defaults to False.
             with_original_df (pd.DataFrame | pl.DataFrame, optional): Original DataFrame to concatenate with results. Defaults to None.
             output_column (str, optional): Name of the output column. Defaults to "inference_result".
+            disable_cache (bool, optional): Whether to disable the cache. Defaults to False.
+            unpack_json (bool, optional): If the output_column is formatted as a JSON string, decides whether to unpack the top level JSON fields in the results into separate columns. Defaults to True.
 
         Returns:
             Union[pl.DataFrame, pd.DataFrame]: The results as a DataFrame. By default, returns polars.DataFrame; when with_original_df is an instance of pandas.DataFrame, returns pandas.DataFrame.
@@ -909,6 +912,23 @@ class Sutro:
                            if include and col in results_df.columns]
 
         results_df = results_df.select(columns_to_keep)
+
+        if unpack_json:
+            try:
+                first_row = json.loads(results_df.head(1)[output_column][0]) # checks if the first row can be json decoded
+                results_df = results_df.with_columns(
+                    pl.col(output_column).str.json_decode().alias("output_column_json_decoded")
+                )
+                json_decoded_fields = first_row.keys()
+                for field in json_decoded_fields:
+                    results_df = results_df.with_columns(
+                        pl.col("output_column_json_decoded").struct.field(field).alias(field)
+                    )
+                # drop the output_column and the json decoded column
+                results_df = results_df.drop([output_column, "output_column_json_decoded"])
+            except:
+                # if the first row cannot be json decoded, do nothing
+                pass
 
         # Handle concatenation with original DataFrame
         if with_original_df is not None:
