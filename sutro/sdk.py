@@ -926,7 +926,7 @@ class Sutro:
                     )
                 # drop the output_column and the json decoded column
                 results_df = results_df.drop([output_column, "output_column_json_decoded"])
-            except:
+            except json.JSONDecodeError:
                 # if the first row cannot be json decoded, do nothing
                 pass
 
