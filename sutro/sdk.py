@@ -436,7 +436,7 @@ class Sutro:
     def infer(
         self,
         data: Union[List, pd.DataFrame, pl.DataFrame, str],
-        model: Union[ModelOptions, List[ModelOptions]] = "llama-3.1-8b",
+        model: Union[ModelOptions, List[ModelOptions]] = "gemma-3-12b-it",
         column: str = None,
         output_column: str = "inference_result",
         job_priority: int = 0,
