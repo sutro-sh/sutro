@@ -17,6 +17,8 @@ from tqdm import tqdm
 import time
 from pydantic import BaseModel
 import json
+import pyarrow.parquet as pq
+import shutil
 
 
 class JobStatus(str, Enum):
@@ -813,12 +815,14 @@ class Sutro:
                 return None
 
     def get_job_results(
-            self,
-            job_id: str,
-            include_inputs: bool = False,
-            include_cumulative_logprobs: bool = False,
-            with_original_df: pl.DataFrame | pd.DataFrame = None,
-            output_column: str = "inference_result",
+        self,
+        job_id: str,
+        include_inputs: bool = False,
+        include_cumulative_logprobs: bool = False,
+        with_original_df: pl.DataFrame | pd.DataFrame = None,
+        output_column: str = "inference_result",
+        disable_cache: bool = False,
+        unpack_json: bool = True,
     ):
         """
         Get the results of a job by its ID.
@@ -831,47 +835,72 @@ class Sutro:
             include_cumulative_logprobs (bool, optional): Whether to include the cumulative logprobs in the results. Defaults to False.
             with_original_df (pd.DataFrame | pl.DataFrame, optional): Original DataFrame to concatenate with results. Defaults to None.
             output_column (str, optional): Name of the output column. Defaults to "inference_result".
+            disable_cache (bool, optional): Whether to disable the cache. Defaults to False.
+            unpack_json (bool, optional): If the output_column is formatted as a JSON string, decides whether to unpack the top level JSON fields in the results into separate columns. Defaults to True.
 
         Returns:
             Union[pl.DataFrame, pd.DataFrame]: The results as a DataFrame. By default, returns polars.DataFrame; when with_original_df is an instance of pandas.DataFrame, returns pandas.DataFrame.
         """
-        endpoint = f"{self.base_url}/job-results"
-        payload = {
-            "job_id": job_id,
-            "include_inputs": include_inputs,
-            "include_cumulative_logprobs": include_cumulative_logprobs,
-        }
-        headers = {
-            "Authorization": f"Key {self.api_key}",
-            "Content-Type": "application/json",
-        }
-        with yaspin(
+
+        
+        file_path = os.path.expanduser(f"~/.sutro/job-results/{job_id}.snappy.parquet")
+        expected_num_columns = 1 + include_inputs + include_cumulative_logprobs
+        contains_expected_columns = False
+        if os.path.exists(file_path):
+            num_columns = pq.read_table(file_path).num_columns
+            contains_expected_columns = num_columns == expected_num_columns
+        
+        if disable_cache == False and contains_expected_columns:
+            with yaspin(
+                SPINNER,
+                text=to_colored_text(f"Loading results from cache: {file_path}"),
+                color=YASPIN_COLOR,
+            ) as spinner:
+                results_df = pl.read_parquet(file_path)
+                spinner.write(to_colored_text("✔ Results loaded from cache", state="success"))
+        else:
+            endpoint = f"{self.base_url}/job-results"
+            payload = {
+                "job_id": job_id,
+                "include_inputs": include_inputs,
+                "include_cumulative_logprobs": include_cumulative_logprobs,
+            }
+            headers = {
+                "Authorization": f"Key {self.api_key}",
+                "Content-Type": "application/json",
+            }
+            with yaspin(
                 SPINNER,
                 text=to_colored_text(f"Gathering results from job: {job_id}"),
                 color=YASPIN_COLOR,
-        ) as spinner:
-            response = requests.post(
-                endpoint, data=json.dumps(payload), headers=headers
-            )
-            if response.status_code != 200:
-                spinner.write(
-                    to_colored_text(
-                        f"Bad status code: {response.status_code}", state="fail"
-                    )
+            ) as spinner:
+                response = requests.post(
+                    endpoint, data=json.dumps(payload), headers=headers
                 )
-                spinner.stop()
-                print(to_colored_text(response.json(), state="fail"))
-                return None
+                if response.status_code != 200:
+                    spinner.write(
+                        to_colored_text(
+                            f"Bad status code: {response.status_code}", state="fail"
+                        )
+                    )
+                    spinner.stop()
+                    print(to_colored_text(response.json(), state="fail"))
+                    return None
 
-            spinner.write(
-                to_colored_text("✔ Job results retrieved", state="success")
-            )
+                spinner.write(
+                    to_colored_text("✔ Job results retrieved", state="success")
+                )
 
-        response_data = response.json()
-        results_df = pl.DataFrame(response_data["results"])
+            response_data = response.json()
+            results_df = pl.DataFrame(response_data["results"])
 
-        results_df = results_df.rename({'outputs': output_column})
+            results_df = results_df.rename({'outputs': output_column})
 
+            if disable_cache == False:
+                os.makedirs(os.path.dirname(file_path), exist_ok=True)
+                results_df.write_parquet(file_path, compression="snappy")
+                spinner.write(to_colored_text("✔ Results saved to cache", state="success"))
+                
         # Ordering inputs col first seems most logical/useful
         column_config = [
             ('inputs', include_inputs),
@@ -883,6 +912,23 @@ class Sutro:
                            if include and col in results_df.columns]
 
         results_df = results_df.select(columns_to_keep)
+
+        if unpack_json:
+            try:
+                first_row = json.loads(results_df.head(1)[output_column][0]) # checks if the first row can be json decoded
+                results_df = results_df.with_columns(
+                    pl.col(output_column).str.json_decode().alias("output_column_json_decoded")
+                )
+                json_decoded_fields = first_row.keys()
+                for field in json_decoded_fields:
+                    results_df = results_df.with_columns(
+                        pl.col("output_column_json_decoded").struct.field(field).alias(field)
+                    )
+                # drop the output_column and the json decoded column
+                results_df = results_df.drop([output_column, "output_column_json_decoded"])
+            except json.JSONDecodeError:
+                # if the first row cannot be json decoded, do nothing
+                pass
 
         # Handle concatenation with original DataFrame
         if with_original_df is not None:
@@ -1296,6 +1342,31 @@ class Sutro:
                 time.sleep(POLL_INTERVAL)
 
         return results
+
+    def _clear_job_results_cache(self): # only to be called by the CLI
+        """
+        Clears the cache for a job results.
+        """
+        if os.path.exists(os.path.expanduser("~/.sutro/job-results")):
+            shutil.rmtree(os.path.expanduser("~/.sutro/job-results"))
+
+    def _show_cache_contents(self):
+        """
+        Shows the contents and size of each file in the job results cache.
+        """
+        # get the size of the job-results directory
+        with yaspin(
+            SPINNER, text=to_colored_text("Retrieving job results cache contents"), color=YASPIN_COLOR
+        ) as spinner:
+            if not os.path.exists(os.path.expanduser("~/.sutro/job-results")):
+                spinner.write(to_colored_text("No job results cache found", "success"))
+                return
+            total_size = 0
+            for file in os.listdir(os.path.expanduser("~/.sutro/job-results")):
+                size = os.path.getsize(os.path.expanduser(f"~/.sutro/job-results/{file}")) / 1024 / 1024 / 1024
+                total_size += size
+                spinner.write(to_colored_text(f"File: {file} - Size: {size} GB"))
+            spinner.write(to_colored_text(f"Total size of results cache at ~/.sutro/job-results: {total_size} GB", "success"))
     
     def _await_job_start(self, job_id: str, timeout: Optional[int] = 7200):
         """
