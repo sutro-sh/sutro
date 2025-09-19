@@ -25,6 +25,7 @@ dependencies = [
     "tqdm==4.67.1",
     "pydantic==2.11.4",
     "pyarrow==21.0.0",
+    "ruff"
 ]
 
 [project.scripts]

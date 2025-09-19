@@ -1,24 +1,17 @@
-import threading
-from concurrent.futures import ThreadPoolExecutor
-from contextlib import contextmanager
 from enum import Enum
-
 import requests
 import pandas as pd
 import polars as pl
 import json
-from typing import Union, List, Optional, Literal, Generator, Dict, Any
+from typing import Union, List, Optional, Literal, Dict, Any
 import os
 import sys
-
-from jaraco.functools import retry
 from yaspin import yaspin
 from yaspin.spinners import Spinners
-from colorama import init, Fore, Back, Style
+from colorama import init, Fore, Style
 from tqdm import tqdm
 import time
 from pydantic import BaseModel
-import json
 import pyarrow.parquet as pq
 import shutil
 
@@ -47,6 +40,7 @@ class JobStatus(str, Enum):
     def is_terminal(self) -> bool:
         return self in self.terminal_statuses()
 
+
 # Initialize colorama (required for Windows)
 init()
 
@@ -73,8 +67,13 @@ ModelOptions = Literal[
     "qwen-3-32b-thinking",
     "gemma-3-4b-it",
     "gemma-3-27b-it",
-    "multilingual-e5-large-instruct",
-    "gte-qwen2-7b-instruct",
+    "gpt-oss-120b",
+    "gpt-oss-20b",
+    "qwen-3-235b-a22b-thinking",
+    "qwen-3-30b-a3b-thinking",
+    "qwen-3-embedding-0.6b",
+    "qwen-3-embedding-6b",
+    "qwen-3-embedding-8b",
 ]
 
 
@@ -101,6 +100,7 @@ def to_colored_text(
             # Default to blue for normal/processing states
             return f"{Fore.BLUE}{text}{Style.RESET_ALL}"
 
+
 # Isn't fully support in all terminals unfortunately. We should switch to Rich
 # at some point, but even Rich links aren't clickable on MacOS Terminal
 def make_clickable_link(url, text=None):
@@ -112,10 +112,9 @@ def make_clickable_link(url, text=None):
         text = url
     return f"\033]8;;{url}\033\\{text}\033]8;;\033\\"
 
+
 class Sutro:
-    def __init__(
-        self, api_key: str = None, base_url: str = "https://api.sutro.sh/"
-    ):
+    def __init__(self, api_key: str = None, base_url: str = "https://api.sutro.sh/"):
         self.api_key = api_key or self.check_for_api_key()
         self.base_url = base_url
 
@@ -222,7 +221,7 @@ class Sutro:
         cost_estimate: bool,
         stay_attached: Optional[bool],
         random_seed_per_input: bool,
-        truncate_rows: bool
+        truncate_rows: bool,
     ):
         input_data = self.handle_data_helper(data, column)
         endpoint = f"{self.base_url}/batch-inference"
@@ -239,7 +238,7 @@ class Sutro:
             "cost_estimate": cost_estimate,
             "sampling_params": sampling_params,
             "random_seed_per_input": random_seed_per_input,
-            "truncate_rows": truncate_rows
+            "truncate_rows": truncate_rows,
         }
 
         # There are two gotchas with yaspin:
@@ -268,13 +267,20 @@ class Sutro:
                     job_id = response_data["results"]
                     if cost_estimate:
                         spinner.write(
-                            to_colored_text(f"Awaiting cost estimates with job ID: {job_id}. You can safely detach and retrieve the cost estimates later.")
+                            to_colored_text(
+                                f"Awaiting cost estimates with job ID: {job_id}. You can safely detach and retrieve the cost estimates later."
+                            )
                         )
                         spinner.stop()
-                        self.await_job_completion(job_id, obtain_results=False, is_cost_estimate=True)
+                        self.await_job_completion(
+                            job_id, obtain_results=False, is_cost_estimate=True
+                        )
                         cost_estimate = self._get_job_cost_estimate(job_id)
                         spinner.write(
-                            to_colored_text(f"✔ Cost estimates retrieved for job {job_id}: ${cost_estimate}", state="success")
+                            to_colored_text(
+                                f"✔ Cost estimates retrieved for job {job_id}: ${cost_estimate}",
+                                state="success",
+                            )
                         )
                         return job_id
                     else:
@@ -285,12 +291,14 @@ class Sutro:
                             )
                         )
                         if not stay_attached:
-                            clickable_link = make_clickable_link(f'https://app.sutro.sh/jobs/{job_id}')
+                            clickable_link = make_clickable_link(
+                                f"https://app.sutro.sh/jobs/{job_id}"
+                            )
                             spinner.write(
                                 to_colored_text(
                                     f"Use `so.get_job_status('{job_id}')` to check the status of the job, or monitor progress at {clickable_link}"
-                                    )
                                 )
+                            )
                             return job_id
         except KeyboardInterrupt:
             pass
@@ -300,22 +308,32 @@ class Sutro:
 
         success = False
         if stay_attached and job_id is not None:
-            spinner.write(to_colored_text("Awaiting job start...", ))
-            clickable_link = make_clickable_link(f'https://app.sutro.sh/jobs/{job_id}')
-            spinner.write(to_colored_text(f'Progress can also be monitored at: {clickable_link}'))
+            spinner.write(
+                to_colored_text(
+                    "Awaiting job start...",
+                )
+            )
+            clickable_link = make_clickable_link(f"https://app.sutro.sh/jobs/{job_id}")
+            spinner.write(
+                to_colored_text(f"Progress can also be monitored at: {clickable_link}")
+            )
             started = self._await_job_start(job_id)
             if not started:
                 failure_reason = self._get_failure_reason(job_id)
-                spinner.write(to_colored_text(f"Failure reason: {failure_reason['message']}", "fail"))
+                spinner.write(
+                    to_colored_text(
+                        f"Failure reason: {failure_reason['message']}", "fail"
+                    )
+                )
                 return None
             s = requests.Session()
             pbar = None
 
             try:
                 with requests.get(
-                        f"{self.base_url}/stream-job-progress/{job_id}",
-                        headers=headers,
-                        stream=True,
+                    f"{self.base_url}/stream-job-progress/{job_id}",
+                    headers=headers,
+                    stream=True,
                 ) as streaming_response:
                     streaming_response.raise_for_status()
                     spinner = yaspin(
@@ -326,9 +344,9 @@ class Sutro:
                     spinner.start()
 
                     token_state = {
-                        'input_tokens': 0,
-                        'output_tokens': 0,
-                            'total_tokens_processed_per_second': 0
+                        "input_tokens": 0,
+                        "output_tokens": 0,
+                        "total_tokens_processed_per_second": 0,
                     }
 
                     for line in streaming_response.iter_lines():
@@ -342,7 +360,7 @@ class Sutro:
                             if json_obj["update_type"] == "progress":
                                 if pbar is None:
                                     spinner.stop()
-                                    postfix = f"Input tokens processed: 0"
+                                    postfix = "Input tokens processed: 0"
                                     pbar = self.fancy_tqdm(
                                         total=len(input_data),
                                         desc="Progress",
@@ -359,7 +377,8 @@ class Sutro:
                                 # Currently, the way the progress stream endpoint is defined,
                                 # its possible to have updates come in that only have 1 or 2 fields
                                 new = {
-                                    k: v for k, v in json_obj.get('result', {}).items()
+                                    k: v
+                                    for k, v in json_obj.get("result", {}).items()
                                     if k in token_state and v >= token_state[k]
                                 }
                                 token_state.update(new)
@@ -390,8 +409,8 @@ class Sutro:
                 # TODO: we implment retries in cases where the job hasn't written results yet
                 # it would be better if we could receive a fully succeeded status from the job
                 # and not have such a race condition
-                max_retries = 20 # winds up being 100 seconds cumulative delay
-                retry_delay = 5 # initial delay in seconds
+                max_retries = 20  # winds up being 100 seconds cumulative delay
+                retry_delay = 5  # initial delay in seconds
 
                 for _ in range(max_retries):
                     time.sleep(retry_delay)
@@ -448,7 +467,7 @@ class Sutro:
         dry_run: bool = False,
         stay_attached: Optional[bool] = None,
         random_seed_per_input: bool = False,
-        truncate_rows: bool = False
+        truncate_rows: bool = False,
     ):
         """
         Run inference on the provided data.
@@ -477,19 +496,25 @@ class Sutro:
         """
         if isinstance(model, list) == False:
             model_list = [model]
-            stay_attached = stay_attached if stay_attached is not None else job_priority == 0
+            stay_attached = (
+                stay_attached if stay_attached is not None else job_priority == 0
+            )
         else:
             model_list = model
             stay_attached = False
 
         # Convert BaseModel to dict if needed
         if output_schema is not None:
-            if hasattr(output_schema, 'model_json_schema'):  # Check for pydantic Model interface
+            if hasattr(
+                output_schema, "model_json_schema"
+            ):  # Check for pydantic Model interface
                 json_schema = output_schema.model_json_schema()
             elif isinstance(output_schema, dict):
                 json_schema = output_schema
             else:
-                raise ValueError("Invalid output schema type. Must be a dictionary or a pydantic Model.")
+                raise ValueError(
+                    "Invalid output schema type. Must be a dictionary or a pydantic Model."
+                )
         else:
             json_schema = None
 
@@ -507,7 +532,7 @@ class Sutro:
                 dry_run,
                 stay_attached,
                 random_seed_per_input,
-                truncate_rows
+                truncate_rows,
             )
             results.append(res)
 
@@ -517,8 +542,6 @@ class Sutro:
             return results[0]
 
         return None
-
-
 
     def attach(self, job_id):
         """
@@ -540,9 +563,9 @@ class Sutro:
         }
 
         with yaspin(
-                SPINNER,
-                text=to_colored_text("Looking for job..."),
-                color=YASPIN_COLOR,
+            SPINNER,
+            text=to_colored_text("Looking for job..."),
+            color=YASPIN_COLOR,
         ) as spinner:
             # Fetch the specific job we want to attach to
             job = self._fetch_job(job_id)
@@ -560,10 +583,14 @@ class Sutro:
                     )
                     return
                 case "FAILED":
-                    spinner.write(to_colored_text("❌ Job is in failed state.", state="fail"))
+                    spinner.write(
+                        to_colored_text("❌ Job is in failed state.", state="fail")
+                    )
                     return
                 case "CANCELLED":
-                    spinner.write(to_colored_text("❌ Job was cancelled.", state="fail"))
+                    spinner.write(
+                        to_colored_text("❌ Job was cancelled.", state="fail")
+                    )
                     return
                 case _:
                     spinner.write(to_colored_text("✔ Job found!", state="success"))
@@ -573,9 +600,9 @@ class Sutro:
 
         try:
             with s.get(
-                    f"{self.base_url}/stream-job-progress/{job_id}",
-                    headers=headers,
-                    stream=True,
+                f"{self.base_url}/stream-job-progress/{job_id}",
+                headers=headers,
+                stream=True,
             ) as streaming_response:
                 streaming_response.raise_for_status()
                 spinner = yaspin(
@@ -583,8 +610,14 @@ class Sutro:
                     text=to_colored_text("Awaiting status updates..."),
                     color=YASPIN_COLOR,
                 )
-                clickable_link = make_clickable_link(f'https://app.sutro.sh/jobs/{job_id}')
-                spinner.write(to_colored_text(f'Progress can also be monitored at: {clickable_link}'))
+                clickable_link = make_clickable_link(
+                    f"https://app.sutro.sh/jobs/{job_id}"
+                )
+                spinner.write(
+                    to_colored_text(
+                        f"Progress can also be monitored at: {clickable_link}"
+                    )
+                )
                 spinner.start()
                 for line in streaming_response.iter_lines():
                     if line:
@@ -597,7 +630,7 @@ class Sutro:
                         if json_obj["update_type"] == "progress":
                             if pbar is None:
                                 spinner.stop()
-                                postfix = f"Input tokens processed: 0"
+                                postfix = "Input tokens processed: 0"
                                 pbar = self.fancy_tqdm(
                                     total=total_rows,
                                     desc="Progress",
@@ -630,8 +663,6 @@ class Sutro:
                 pbar.close()
             if spinner:
                 spinner.stop()
-
-
 
     def fancy_tqdm(
         self,
@@ -748,7 +779,7 @@ class Sutro:
         response = requests.get(endpoint, headers=headers)
         if response.status_code != 200:
             return None
-        return response.json().get('job')
+        return response.json().get("job")
 
     def _get_job_cost_estimate(self, job_id: str):
         """
@@ -758,8 +789,8 @@ class Sutro:
         if not job:
             return None
 
-        return job.get('cost_estimate')
-    
+        return job.get("cost_estimate")
+
     def _get_failure_reason(self, job_id: str):
         """
         Get the failure reason for a job.
@@ -767,7 +798,7 @@ class Sutro:
         job = self._fetch_job(job_id)
         if not job:
             return None
-        return job.get('failure_reason')
+        return job.get("failure_reason")
 
     def _fetch_job_status(self, job_id: str):
         """
@@ -806,13 +837,15 @@ class Sutro:
             str: The status of the job.
         """
         with yaspin(
-                SPINNER,
-                text=to_colored_text(f"Checking job status with ID: {job_id}"),
-                color=YASPIN_COLOR,
+            SPINNER,
+            text=to_colored_text(f"Checking job status with ID: {job_id}"),
+            color=YASPIN_COLOR,
         ) as spinner:
             try:
                 response_data = self._fetch_job_status(job_id)
-                spinner.write(to_colored_text("✔ Job status retrieved!", state="success"))
+                spinner.write(
+                    to_colored_text("✔ Job status retrieved!", state="success")
+                )
                 return response_data["job_status"][job_id]
             except requests.HTTPError as e:
                 spinner.write(
@@ -852,14 +885,13 @@ class Sutro:
             Union[pl.DataFrame, pd.DataFrame]: The results as a DataFrame. By default, returns polars.DataFrame; when with_original_df is an instance of pandas.DataFrame, returns pandas.DataFrame.
         """
 
-        
         file_path = os.path.expanduser(f"~/.sutro/job-results/{job_id}.snappy.parquet")
         expected_num_columns = 1 + include_inputs + include_cumulative_logprobs
         contains_expected_columns = False
         if os.path.exists(file_path):
             num_columns = pq.read_table(file_path).num_columns
             contains_expected_columns = num_columns == expected_num_columns
-        
+
         if disable_cache == False and contains_expected_columns:
             with yaspin(
                 SPINNER,
@@ -867,7 +899,9 @@ class Sutro:
                 color=YASPIN_COLOR,
             ) as spinner:
                 results_df = pl.read_parquet(file_path)
-                spinner.write(to_colored_text("✔ Results loaded from cache", state="success"))
+                spinner.write(
+                    to_colored_text("✔ Results loaded from cache", state="success")
+                )
         else:
             endpoint = f"{self.base_url}/job-results"
             payload = {
@@ -904,38 +938,51 @@ class Sutro:
             response_data = response.json()
             results_df = pl.DataFrame(response_data["results"])
 
-            results_df = results_df.rename({'outputs': output_column})
+            results_df = results_df.rename({"outputs": output_column})
 
             if disable_cache == False:
                 os.makedirs(os.path.dirname(file_path), exist_ok=True)
                 results_df.write_parquet(file_path, compression="snappy")
-                spinner.write(to_colored_text("✔ Results saved to cache", state="success"))
-                
+                spinner.write(
+                    to_colored_text("✔ Results saved to cache", state="success")
+                )
+
         # Ordering inputs col first seems most logical/useful
         column_config = [
-            ('inputs', include_inputs),
+            ("inputs", include_inputs),
             (output_column, True),
-            ('cumulative_logprobs', include_cumulative_logprobs),
+            ("cumulative_logprobs", include_cumulative_logprobs),
         ]
 
-        columns_to_keep = [col for col, include in column_config
-                           if include and col in results_df.columns]
+        columns_to_keep = [
+            col
+            for col, include in column_config
+            if include and col in results_df.columns
+        ]
 
         results_df = results_df.select(columns_to_keep)
 
         if unpack_json:
             try:
-                first_row = json.loads(results_df.head(1)[output_column][0]) # checks if the first row can be json decoded
+                first_row = json.loads(
+                    results_df.head(1)[output_column][0]
+                )  # checks if the first row can be json decoded
                 results_df = results_df.with_columns(
-                    pl.col(output_column).str.json_decode().alias("output_column_json_decoded")
+                    pl.col(output_column)
+                    .str.json_decode()
+                    .alias("output_column_json_decoded")
                 )
                 json_decoded_fields = first_row.keys()
                 for field in json_decoded_fields:
                     results_df = results_df.with_columns(
-                        pl.col("output_column_json_decoded").struct.field(field).alias(field)
+                        pl.col("output_column_json_decoded")
+                        .struct.field(field)
+                        .alias(field)
                     )
                 # drop the output_column and the json decoded column
-                results_df = results_df.drop([output_column, "output_column_json_decoded"])
+                results_df = results_df.drop(
+                    [output_column, "output_column_json_decoded"]
+                )
             except json.JSONDecodeError:
                 # if the first row cannot be json decoded, do nothing
                 pass
@@ -1021,7 +1068,9 @@ class Sutro:
                 return
             dataset_id = response.json()["dataset_id"]
             spinner.write(
-                to_colored_text(f"✔ Dataset created with ID: {dataset_id}", state="success")
+                to_colored_text(
+                    f"✔ Dataset created with ID: {dataset_id}", state="success"
+                )
             )
         return dataset_id
 
@@ -1089,8 +1138,7 @@ class Sutro:
                     "dataset_id": dataset_id,
                 }
 
-                headers = {
-                    "Authorization": f"Key {self.api_key}"}
+                headers = {"Authorization": f"Key {self.api_key}"}
 
                 count += 1
                 spinner.write(
@@ -1174,7 +1222,9 @@ class Sutro:
                 print(to_colored_text(f"Error: {response.json()}", state="fail"))
                 return
             spinner.write(
-                to_colored_text(f"✔ Files listed in dataset: {dataset_id}", state="success")
+                to_colored_text(
+                    f"✔ Files listed in dataset: {dataset_id}", state="success"
+                )
             )
         return response.json()["files"]
 
@@ -1296,7 +1346,13 @@ class Sutro:
                 return
         return response.json()["quotas"]
 
-    def await_job_completion(self, job_id: str, timeout: Optional[int] = 7200, obtain_results: bool = True, is_cost_estimate: bool=False) -> list | None:
+    def await_job_completion(
+        self,
+        job_id: str,
+        timeout: Optional[int] = 7200,
+        obtain_results: bool = True,
+        is_cost_estimate: bool = False,
+    ) -> list | None:
         """
         Waits for job completion to occur and then returns the results upon
         a successful completion.
@@ -1318,8 +1374,14 @@ class Sutro:
             SPINNER, text=to_colored_text("Awaiting job completion"), color=YASPIN_COLOR
         ) as spinner:
             if not is_cost_estimate:
-                clickable_link = make_clickable_link(f'https://app.sutro.sh/jobs/{job_id}')
-                spinner.write(to_colored_text(f'Progress can also be monitored at: {clickable_link}'))
+                clickable_link = make_clickable_link(
+                    f"https://app.sutro.sh/jobs/{job_id}"
+                )
+                spinner.write(
+                    to_colored_text(
+                        f"Progress can also be monitored at: {clickable_link}"
+                    )
+                )
             while (time.time() - start_time) < timeout:
                 try:
                     status = self._fetch_job_status(job_id)
@@ -1336,9 +1398,13 @@ class Sutro:
                 spinner.text = to_colored_text(f"Job status is {status} for {job_id}")
 
                 if status == JobStatus.SUCCEEDED:
-                    spinner.stop() # Stop this spinner as `get_job_results` has its own spinner text
+                    spinner.stop()  # Stop this spinner as `get_job_results` has its own spinner text
                     if obtain_results:
-                        spinner.write(to_colored_text("Job completed! Retrieving results...", "success"))
+                        spinner.write(
+                            to_colored_text(
+                                "Job completed! Retrieving results...", "success"
+                            )
+                        )
                         results = self.get_job_results(job_id)
                     break
                 if status == JobStatus.FAILED:
@@ -1348,12 +1414,11 @@ class Sutro:
                     spinner.write(to_colored_text("Job has been cancelled"))
                     return None
 
-
                 time.sleep(POLL_INTERVAL)
 
         return results
 
-    def _clear_job_results_cache(self): # only to be called by the CLI
+    def _clear_job_results_cache(self):  # only to be called by the CLI
         """
         Clears the cache for a job results.
         """
@@ -1366,29 +1431,41 @@ class Sutro:
         """
         # get the size of the job-results directory
         with yaspin(
-            SPINNER, text=to_colored_text("Retrieving job results cache contents"), color=YASPIN_COLOR
+            SPINNER,
+            text=to_colored_text("Retrieving job results cache contents"),
+            color=YASPIN_COLOR,
         ) as spinner:
             if not os.path.exists(os.path.expanduser("~/.sutro/job-results")):
                 spinner.write(to_colored_text("No job results cache found", "success"))
                 return
             total_size = 0
             for file in os.listdir(os.path.expanduser("~/.sutro/job-results")):
-                size = os.path.getsize(os.path.expanduser(f"~/.sutro/job-results/{file}")) / 1024 / 1024 / 1024
+                size = (
+                    os.path.getsize(os.path.expanduser(f"~/.sutro/job-results/{file}"))
+                    / 1024
+                    / 1024
+                    / 1024
+                )
                 total_size += size
                 spinner.write(to_colored_text(f"File: {file} - Size: {size} GB"))
-            spinner.write(to_colored_text(f"Total size of results cache at ~/.sutro/job-results: {total_size} GB", "success"))
-    
+            spinner.write(
+                to_colored_text(
+                    f"Total size of results cache at ~/.sutro/job-results: {total_size} GB",
+                    "success",
+                )
+            )
+
     def _await_job_start(self, job_id: str, timeout: Optional[int] = 7200):
         """
         Waits for job start to occur and then returns the results upon
         a successful start.
-        
+
         """
         POLL_INTERVAL = 5
 
         start_time = time.time()
         with yaspin(
-                SPINNER, text=to_colored_text("Awaiting job completion"), color=YASPIN_COLOR
+            SPINNER, text=to_colored_text("Awaiting job completion"), color=YASPIN_COLOR
         ) as spinner:
             while (time.time() - start_time) < timeout:
                 try:
@@ -1415,4 +1492,3 @@ class Sutro:
                 time.sleep(POLL_INTERVAL)
 
         return False
-            
