@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import timezone
 import click
 from colorama import Fore, Style
 import os
@@ -35,9 +35,7 @@ def check_auth():
 def get_sdk():
     config = load_config()
     if config.get("base_url") != None:
-        return Sutro(
-            api_key=config.get("api_key"), base_url=config.get("base_url")
-        )
+        return Sutro(api_key=config.get("api_key"), base_url=config.get("base_url"))
     else:
         return Sutro(api_key=config.get("api_key"))
 
@@ -140,6 +138,7 @@ def login():
 def jobs():
     """Manage jobs."""
     pass
+
 
 @jobs.command()
 @click.option(
@@ -359,10 +358,12 @@ def download(dataset_id, file_name=None, output_path=None):
             with open(output_path + "/" + file_name, "wb") as f:
                 f.write(file)
 
+
 @cli.group()
 def cache():
     """Manage the local job results cache."""
     pass
+
 
 @cache.command()
 def clear():
@@ -370,6 +371,7 @@ def clear():
     sdk = get_sdk()
     sdk._clear_job_results_cache()
     click.echo(Fore.GREEN + "Job results cache cleared." + Style.RESET_ALL)
+
 
 @cache.command()
 def show():
