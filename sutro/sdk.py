@@ -10,6 +10,8 @@ import json
 from typing import Union, List, Optional, Literal, Generator, Dict, Any
 import os
 import sys
+
+from jaraco.functools import retry
 from yaspin import yaspin
 from yaspin.spinners import Spinners
 from colorama import init, Fore, Back, Style
@@ -491,6 +493,7 @@ class Sutro:
         else:
             json_schema = None
 
+        results = []
         for model in model_list:
             res = self._run_one_batch_inference(
                 data,
@@ -506,8 +509,15 @@ class Sutro:
                 random_seed_per_input,
                 truncate_rows
             )
-            if stay_attached:
-                return res
+            results.append(res)
+
+        if len(results) > 1:
+            return results
+        elif len(results) == 1:
+            return results[0]
+
+        return None
+
 
 
     def attach(self, job_id):
