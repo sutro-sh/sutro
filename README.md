@@ -29,6 +29,7 @@ import sutro as so
 import pandas as pd
 from pydantic import BaseModel
 
+# Load your data
 df = pd.DataFrame({
     "review": [
         "The battery life is terrible.",
@@ -37,13 +38,14 @@ df = pd.DataFrame({
     ]
 })
 
-system_prompt = """
-Classify the sentiment of the review as positive, neutral, or negative.
-"""
+# Add a system prompt (optional)
+system_prompt = "Classify the sentiment of the review as positive, neutral, or negative."
 
+# Define an output schema (optional)
 class Sentiment(BaseModel):
     sentiment: str
 
+# Run a prototyping (p0) job
 df = so.infer(
     df,
     column="review",
@@ -52,11 +54,17 @@ df = so.infer(
 )
 ```
 
+Will produce a result like: 
+
+![Prototyping Job Result](./assets/terminal-3.png)
+
 ### Scaling up:
 
 ```python
+# load a larger dataset
 df = pd.read_csv("1-million-reviews.csv")
 
+# Run a production (p1) job
 df = so.infer(
     df,
     column="review",
