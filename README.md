@@ -2,9 +2,9 @@
 ![PyPI - Version](https://img.shields.io/pypi/v/sutro)
 ![PyPI - Downloads](https://img.shields.io/pypi/dm/sutro)
 
-Use Sutro to process or generate unstructured data using AI **quickly, inexpensively, and near limitless scale**.
+Sutro makes it easy to process and generate unstructured data using LLMs, from quick experiments to billion token jobs. 
 
-Whether you're generating synthetic data, running model evals, structuring unstructured data, classifying data, or generating embeddings - batch inference is better with Sutro.
+Whether you're generating synthetic data, running model evals, structuring unstructured data, classifying data, or generating embeddings - *batch inference is faster, cheaper, and easier* with Sutro.
 
 Visit [sutro.sh](https://sutro.sh) to learn more and request access to the cloud beta.
 
@@ -71,9 +71,9 @@ df = sutro.run(
 
 ## What is Sutro?
 
-Sutro is a **high-throughput batch inference service for LLM workloads**. With just a few lines of Python, you can quickly run fast inference jobs across open-source foundation models—at scale, with strong cost/time guarantees, and without worrying about infrastructure.
+Sutro is a **serverless, high-throughput batch inference service for LLM workloads**. With just a few lines of Python, you can quickly run batch inference jobs using open-source foundation models—at scale, with strong cost/time guarantees, and without worrying about infrastructure.
 
-Think of Sutro as **online analytical processing (OLAP) for AI**: you submit queries over unstructured data (documents, emails, product reviews, etc.), and Sutro handles the heavy lifting of job execution from distributed execution to optimized LLM inference. 
+Think of Sutro as **online analytical processing (OLAP) for AI**: you submit queries over unstructured data (documents, emails, product reviews, etc.), and Sutro handles the heavy lifting of job execution - from intelligent batching to cloud orchestration to inference framework and hardware optimizations. You just bring your data, and Sutro handles the rest.
 
 
 ## 📚 Documentation & Examples
@@ -112,28 +112,12 @@ Think of Sutro as **online analytical processing (OLAP) for AI**: you submit que
 ## 🧑‍💻 Typical Use Cases
 
 - **Synthetic data generation**: Create millions of product reviews, conversations, or paraphrases for pre-training or distillation.
-- **Model evals**: Easily run LLM benchmarks at scale, without managing GPUs or data.
-- **Unstructured data analytics**: Run analytics over unstructured data (e.g. customer reviews, product descriptions, emails, etc.).
+- **Model evals**: Easily run LLM benchmarks on a scheduled basis to detect model regressions or performance degradation.
+- **Unstructured data analytics**: Run analytical workloads over unstructured data (e.g. customer reviews, product descriptions, emails, etc.).
 - **Semantic tagging**: Add boolean/numeric/closed-set tags to messy data (e.g. LinkedIn bios, company descriptions).  
-- **Structured Extraction**: Pull structured fields out of unstructured docs at scale.  
+- **Structured Extraction**: Pull structured fields out of unstructured documents at scale.  
 - **Classification**: Apply consistent labels across large datasets (spam, sentiment, topic, compliance risk).  
 - **Embedding generation**: Generate and store embeddings for downstream search/analytics.  
-
----
-
-## ⚙️ How It Works
-
-1. **Prototype quickly**: Use a sample of your data, test multiple models and/or configurations, and use the Sutro web app to compare results.
-2. **Scale seamlessly**: Once you're satisfied with your configuration, change a single line of code to run your job at near-limitless scale. Await job completion or trigger a callback when your job is done.
-3. **Move to production**: Easily schedule your job using your favorite orchestrator, and easily build pipelines with Pythonic data integrations.  
-
-Behind the scenes, Sutro optimizes for throughput, cost, and reliability:
-- Smart batching  
-- GPU scheduling, parallelization, and fault-tolerance 
-- Inference framework and hardware optimizations
-- Flat usage-based pricing per million tokens (input + output)
-
----
 
 ## 🔌 Integrations
 
@@ -141,23 +125,17 @@ Behind the scenes, Sutro optimizes for throughput, cost, and reliability:
 - **Files**: CSV, Parquet  
 - **Storage**: S3-Compatible Object Stores (e.g. R2, S3, GCS, etc.)
 
----
+## 📦 Hosting Options
 
-## 🛡️ When to Use Sutro
+- **Cloud**: Run Sutro on our secure, multi-tenant cloud.
+- **Isolated Deployments**: Bring your own storage, models, or cloud resources.
+- **Local and Self-Hosted**: Coming soon!
 
-- You want to process or generate unstructured data using foundation models **quickly, cheaply, and at scale**.
-- You want a clean, **easy-to-use Python SDK and stateful job management**.
-- You want **deterministic SLAs** instead of ad-hoc scripts.  
-- You’d like a **query-like UX** over unstructured data.  
-- You’d prefer **not** to manage GPUs, quotas, or container orchestration.  
-
----
+See our [pricing page](https://sutro.sh/pricing) for more details.
 
 ## 🤝 Contributing
 
 We welcome contributions! Please reach out to us at [team@sutro.sh](mailto:team@sutro.sh) to get involved.
-
----
 
 ## 📄 License
 
