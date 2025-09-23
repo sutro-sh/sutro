@@ -972,13 +972,52 @@ class Sutro:
                     .str.json_decode()
                     .alias("output_column_json_decoded")
                 )
-                json_decoded_fields = first_row.keys()
-                for field in json_decoded_fields:
+                json_decoded_fields = list(first_row.keys())
+
+                # Check if top level keys are content and reasoning_content
+                if 'content' in json_decoded_fields and 'reasoning_content' in json_decoded_fields:
+                    # Extract reasoning field
                     results_df = results_df.with_columns(
+<<<<<<< Updated upstream
                         pl.col("output_column_json_decoded")
                         .struct.field(field)
                         .alias(field)
+=======
+                        pl.col("output_column_json_decoded").struct.field("reasoning_content").alias("reasoning_content")
+>>>>>>> Stashed changes
                     )
+
+                    # Try to extract JSON from content field
+                    try:
+                        content_sample = first_row.get("content", "")
+                        content_json = json.loads(json.dumps(content_sample))
+                        # extract out the content field into a new column
+                        results_df = results_df.with_columns(
+                            pl.col("output_column_json_decoded").struct.field("content").cast(pl.String).alias("content")
+                        )
+                        results_df = results_df.with_columns(
+                            pl.col("content").str.json_decode().alias("content_json_decoded")
+                        )
+                        # Extract fields from content JSON
+                        for field in content_json.keys():
+                            results_df = results_df.with_columns(
+                                pl.col("content_json_decoded").struct.field(field).alias(field)
+                            )
+                        # Drop intermediate content JSON column
+                        results_df = results_df.drop(["content_json_decoded"])
+                    except (json.JSONDecodeError, TypeError) as e:
+                        print(e)
+                        # Content field is not valid JSON, extract as-is
+                        results_df = results_df.with_columns(
+                            pl.col("output_column_json_decoded").struct.field("content").alias("content")
+                        )
+                else:
+                    # Original behavior for other structures
+                    for field in json_decoded_fields:
+                        results_df = results_df.with_columns(
+                            pl.col("output_column_json_decoded").struct.field(field).alias(field)
+                        )
+
                 # drop the output_column and the json decoded column
                 results_df = results_df.drop(
                     [output_column, "output_column_json_decoded"]
