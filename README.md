@@ -26,11 +26,11 @@ sutro login
 
 ```python
 import sutro as so
-import pandas as pd
+import polars as pl
 from pydantic import BaseModel
 
 # Load your data
-df = pd.DataFrame({
+df = pl.DataFrame({
     "review": [
         "The battery life is terrible.",
         "Great camera and build quality!",
@@ -52,28 +52,33 @@ df = so.infer(
     model="qwen-3-32b",
     output_schema=Sentiment
 )
+
+print(df)
 ```
 
 Will produce a result like: 
 
-![Prototyping Job Result](./assets/terminal-3.png)
+![Prototyping Job Result](./assets/terminal-4.png)
 
 ### Scaling up:
 
 ```python
 # load a larger dataset
-df = pd.read_csv("1-million-reviews.csv")
+df = pl.read_parquet('hf://datasets/sutro/synthetic-product-reviews-20k/results.parquet')
 
 # Run a production (p1) job
-df = so.infer(
+job_id = so.infer(
     df,
-    column="review",
+    column="review_text",
     model="qwen-3-32b",
     output_schema=Sentiment,
     job_priority=1 # <-- one line of code for near-limitless scale
 )
 ```
 
+You can track live progress of your job, view results, and share with your team from the Sutro web app:
+
+![Production Job Result](./assets/webui.gif)
 
 ## What is Sutro?
 
