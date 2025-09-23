@@ -25,11 +25,10 @@ sutro login
 ### Run your first job:
 
 ```python
-import sutro
+import sutro as so
 import pandas as pd
 from pydantic import BaseModel
 
-# Example dataset
 df = pd.DataFrame({
     "review": [
         "The battery life is terrible.",
@@ -45,11 +44,10 @@ Classify the sentiment of the review as positive, neutral, or negative.
 class Sentiment(BaseModel):
     sentiment: str
 
-# Run sentiment classification at scale
-df = sutro.run(
+df = so.infer(
     df,
     column="review",
-    model="qwen-3-32b"
+    model="qwen-3-32b",
     output_schema=Sentiment
 )
 ```
@@ -57,14 +55,14 @@ df = sutro.run(
 ### Scaling up:
 
 ```python
-df = pd.read_csv("reviews_1m.csv")
+df = pd.read_csv("1-million-reviews.csv")
 
-df = sutro.run(
+df = so.infer(
     df,
     column="review",
     model="qwen-3-32b",
     output_schema=Sentiment,
-    job_priority=1 # <-- a single line of code for near-limitless scale
+    job_priority=1 # <-- one line of code for near-limitless scale
 )
 ```
 
