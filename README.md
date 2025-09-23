@@ -2,7 +2,7 @@
 ![PyPI - Version](https://img.shields.io/pypi/v/sutro)
 ![PyPI - Downloads](https://img.shields.io/pypi/dm/sutro)
 
-Sutro makes it easy to process and generate unstructured data using LLMs, from quick experiments to billion token jobs. 
+Sutro makes it easy to analyze and generate unstructured data using LLMs, from quick experiments to billion token jobs. 
 
 Whether you're generating synthetic data, running model evals, structuring unstructured data, classifying data, or generating embeddings - *batch inference is faster, cheaper, and easier* with Sutro.
 

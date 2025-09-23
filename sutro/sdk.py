@@ -978,13 +978,9 @@ class Sutro:
                 if 'content' in json_decoded_fields and 'reasoning_content' in json_decoded_fields:
                     # Extract reasoning field
                     results_df = results_df.with_columns(
-<<<<<<< Updated upstream
                         pl.col("output_column_json_decoded")
                         .struct.field(field)
                         .alias(field)
-=======
-                        pl.col("output_column_json_decoded").struct.field("reasoning_content").alias("reasoning_content")
->>>>>>> Stashed changes
                     )
 
                     # Try to extract JSON from content field
