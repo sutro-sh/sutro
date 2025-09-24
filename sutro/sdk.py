@@ -846,7 +846,7 @@ class Sutro:
                 spinner.write(
                     to_colored_text("✔ Job status retrieved!", state="success")
                 )
-                return response_data["job_status"][job_id]
+                return response_data
             except requests.HTTPError as e:
                 spinner.write(
                     to_colored_text(
