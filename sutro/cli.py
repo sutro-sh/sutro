@@ -246,7 +246,8 @@ def results(
     job_results = sdk.get_job_results(
         job_id, include_inputs, include_cumulative_logprobs
     )
-    if not job_results:
+    if job_results is None or len(job_results) == 0:
+        print(Fore.YELLOW + "No results found for job " + job_id + "." + Style.RESET_ALL)
         return
 
     df = pl.DataFrame(job_results)
