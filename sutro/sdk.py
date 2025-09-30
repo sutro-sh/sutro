@@ -15,6 +15,8 @@ from pydantic import BaseModel
 import pyarrow.parquet as pq
 import shutil
 
+JOB_NAME_CHAR_LIMIT = 45
+JOB_DESCRIPTION_CHAR_LIMIT = 512
 
 class JobStatus(str, Enum):
     """Job statuses that will be returned by the API & SDK"""
@@ -62,15 +64,20 @@ ModelOptions = Literal[
     "llama-3.3-70b",
     "llama-3.3-70b",
     "qwen-3-4b",
+    "qwen-3-14b",
     "qwen-3-32b",
+    "qwen-3-30b-a3b",
+    "qwen-3-235b-a22b",
     "qwen-3-4b-thinking",
+    "qwen-3-14b-thinking",
     "qwen-3-32b-thinking",
-    "gemma-3-4b-it",
-    "gemma-3-27b-it",
-    "gpt-oss-120b",
-    "gpt-oss-20b",
     "qwen-3-235b-a22b-thinking",
     "qwen-3-30b-a3b-thinking",
+    "gemma-3-4b-it",
+    "gemma-3-12b-it",
+    "gemma-3-27b-it",
+    "gpt-oss-20b",
+    "gpt-oss-120b",
     "qwen-3-embedding-0.6b",
     "qwen-3-embedding-6b",
     "qwen-3-embedding-8b",
@@ -258,6 +265,12 @@ class Sutro:
         name: str,
         description: str,
     ):
+        # Validate name and description lengths
+        if name is not None and len(name) > JOB_NAME_CHAR_LIMIT:
+            raise ValueError(f"Job name cannot exceed {JOB_NAME_CHAR_LIMIT} characters.")
+        if description is not None and len(description) > JOB_DESCRIPTION_CHAR_LIMIT:
+            raise ValueError(f"Job description cannot exceed {JOB_DESCRIPTION_CHAR_LIMIT} characters.")
+
         input_data = self.handle_data_helper(data, column)
         endpoint = f"{self.base_url}/batch-inference"
         headers = {
