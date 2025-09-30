@@ -246,7 +246,6 @@ class Sutro:
         data: Union[List, pd.DataFrame, pl.DataFrame, str],
         model: ModelOptions,
         column: Union[str, List[str]],
-        description: Union[str, List[str]],
         output_column: str,
         job_priority: int,
         json_schema: Dict[str, Any],
@@ -257,6 +256,7 @@ class Sutro:
         random_seed_per_input: bool,
         truncate_rows: bool,
         name: str,
+        description: str,
     ):
         input_data = self.handle_data_helper(data, column)
         endpoint = f"{self.base_url}/batch-inference"
@@ -557,6 +557,18 @@ class Sutro:
                 raise ValueError("Name must be a string or None if using a single model.")
             name_list = [name]
 
+        if isinstance(model_list, list):
+            if isinstance(description, list):
+                if len(description) != len(model_list):
+                    raise ValueError("Descriptions list must be the same length as the model list.")
+                description_list = description
+            elif isinstance(description, str):
+                raise ValueError("Description must be a list if using a list of models.")
+        else:
+            if isinstance(name, list):
+                raise ValueError("Description must be a string or None if using a single model.")
+            description_list = [description]
+
         # Convert BaseModel to dict if needed
         if output_schema is not None:
             if hasattr(
@@ -578,7 +590,6 @@ class Sutro:
                 data,
                 model_list[i],
                 column,
-                description,
                 output_column,
                 job_priority,
                 json_schema,
@@ -589,6 +600,7 @@ class Sutro:
                 random_seed_per_input,
                 truncate_rows,
                 name_list[i],
+                description_list[i],
             )
             results.append(res)
 
