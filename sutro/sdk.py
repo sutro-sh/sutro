@@ -222,6 +222,7 @@ class Sutro:
         stay_attached: Optional[bool],
         random_seed_per_input: bool,
         truncate_rows: bool,
+        name: str,
     ):
         input_data = self.handle_data_helper(data, column)
         endpoint = f"{self.base_url}/batch-inference"
@@ -239,6 +240,7 @@ class Sutro:
             "sampling_params": sampling_params,
             "random_seed_per_input": random_seed_per_input,
             "truncate_rows": truncate_rows,
+            "name": name,
         }
 
         # There are two gotchas with yaspin:
@@ -284,9 +286,10 @@ class Sutro:
                         )
                         return job_id
                     else:
+                        name_text = f" and name {name}" if name is not None else ""
                         spinner.write(
                             to_colored_text(
-                                f"🛠 Priority {job_priority} Job created with ID: {job_id}.",
+                                f"🛠 Priority {job_priority} Job created with ID: {job_id}{name_text}.",
                                 state="success",
                             )
                         )
@@ -458,6 +461,7 @@ class Sutro:
         self,
         data: Union[List, pd.DataFrame, pl.DataFrame, str],
         model: Union[ModelOptions, List[ModelOptions]] = "gemma-3-12b-it",
+        name: Union[str, List[str]] = None,
         column: str = None,
         output_column: str = "inference_result",
         job_priority: int = 0,
@@ -478,6 +482,7 @@ class Sutro:
         Args:
             data (Union[List, pd.DataFrame, pl.DataFrame, str]): The data to run inference on.
             model (Union[ModelOptions, List[ModelOptions]], optional): The model(s) to use for inference. Defaults to "llama-3.1-8b". You can pass a single model or a list of models. In the case of a list, the inference will be run in parallel for each model and stay_attached will be set to False.
+            name (str, optional): A job name for experiment/metadata tracking purposes. If using a list of models, you must pass a list of names with length equal to the number of models, or None. Defaults to None.
             column (str, optional): The column name to use for inference. Required if data is a DataFrame, file path, or dataset.
             output_column (str, optional): The column name to store the inference results in if the input is a DataFrame. Defaults to "inference_result".
             job_priority (int, optional): The priority of the job. Defaults to 0.
@@ -503,6 +508,18 @@ class Sutro:
             model_list = model
             stay_attached = False
 
+        if isinstance(model_list, list):
+            if isinstance(name, list):
+                if len(name) != len(model_list):
+                    raise ValueError("Name list must be the same length as the model list.")
+                name_list = name
+            elif isinstance(name, str):
+                raise ValueError("Name must be a list if using a list of models.")
+        else:
+            if isinstance(name, list):
+                raise ValueError("Name must be a string or None if using a single model.")
+            name_list = [name]
+
         # Convert BaseModel to dict if needed
         if output_schema is not None:
             if hasattr(
@@ -517,12 +534,12 @@ class Sutro:
                 )
         else:
             json_schema = None
-
+        
         results = []
-        for model in model_list:
+        for i in range(len(model_list)):
             res = self._run_one_batch_inference(
                 data,
-                model,
+                model_list[i],
                 column,
                 output_column,
                 job_priority,
@@ -533,6 +550,7 @@ class Sutro:
                 stay_attached,
                 random_seed_per_input,
                 truncate_rows,
+                name_list[i],
             )
             results.append(res)
 
