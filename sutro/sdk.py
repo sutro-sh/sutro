@@ -859,7 +859,7 @@ class Sutro:
                 spinner.write(
                     to_colored_text("✔ Job status retrieved!", state="success")
                 )
-                return response_data["job_status"][job_id]
+                return response_data
             except requests.HTTPError as e:
                 spinner.write(
                     to_colored_text(
@@ -996,7 +996,7 @@ class Sutro:
                 results_df = results_df.drop(
                     [output_column, "output_column_json_decoded"]
                 )
-            except json.JSONDecodeError:
+            except Exception as e:
                 # if the first row cannot be json decoded, do nothing
                 pass
 
