@@ -246,6 +246,7 @@ class Sutro:
         data: Union[List, pd.DataFrame, pl.DataFrame, str],
         model: ModelOptions,
         column: Union[str, List[str]],
+        description: Union[str, List[str]],
         output_column: str,
         job_priority: int,
         json_schema: Dict[str, Any],
@@ -274,6 +275,7 @@ class Sutro:
             "random_seed_per_input": random_seed_per_input,
             "truncate_rows": truncate_rows,
             "name": name,
+            "description": description,
         }
 
         # There are two gotchas with yaspin:
@@ -495,6 +497,7 @@ class Sutro:
         data: Union[List, pd.DataFrame, pl.DataFrame, str],
         model: Union[ModelOptions, List[ModelOptions]] = "gemma-3-12b-it",
         name: Union[str, List[str]] = None,
+        description: Union[str, List[str]] = None,
         column: Union[str, List[str]] = None,
         output_column: str = "inference_result",
         job_priority: int = 0,
@@ -516,6 +519,7 @@ class Sutro:
             data (Union[List, pd.DataFrame, pl.DataFrame, str]): The data to run inference on.
             model (Union[ModelOptions, List[ModelOptions]], optional): The model(s) to use for inference. Defaults to "llama-3.1-8b". You can pass a single model or a list of models. In the case of a list, the inference will be run in parallel for each model and stay_attached will be set to False.
             name (str, optional): A job name for experiment/metadata tracking purposes. If using a list of models, you must pass a list of names with length equal to the number of models, or None. Defaults to None.
+            description (str, optional): A job description for experiment/metadata tracking purposes. If using a list of models, you must pass a list of descriptions with length equal to the number of models, or None. Defaults to None.
             column (str, optional): The column name to use for inference. Required if data is a DataFrame, file path, or dataset. If a list is supplied, it will concatenate the columns of the list into a single column, accepting separator strings.
             output_column (str, optional): The column name to store the inference results in if the input is a DataFrame. Defaults to "inference_result".
             job_priority (int, optional): The priority of the job. Defaults to 0.
@@ -574,6 +578,7 @@ class Sutro:
                 data,
                 model_list[i],
                 column,
+                description,
                 output_column,
                 job_priority,
                 json_schema,
