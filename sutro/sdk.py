@@ -16,6 +16,9 @@ import pyarrow.parquet as pq
 import shutil
 
 
+JOB_NAME_CHAR_LIMIT = 45
+JOB_DESCRIPTION_CHAR_LIMIT = 512
+
 class JobStatus(str, Enum):
     """Job statuses that will be returned by the API & SDK"""
 
@@ -468,6 +471,8 @@ class Sutro:
         stay_attached: Optional[bool] = None,
         random_seed_per_input: bool = False,
         truncate_rows: bool = False,
+        name: str = None,
+        description: str = None,
     ):
         """
         Run inference on the provided data.
@@ -489,11 +494,19 @@ class Sutro:
             stay_attached (bool, optional): If True, the method will stay attached to the job until it is complete. Defaults to True for prototyping jobs, False otherwise.
             random_seed_per_input (bool, optional): If True, the method will use a different random seed for each input. Defaults to False.
             truncate_rows (bool, optional): If True, any rows that have a token count exceeding the context window length of the selected model will be truncated to the max length that will fit within the context window. Defaults to False.
+            name (str, optional): A name for the job. Maximum 45 characters. Defaults to None.
+            description (str, optional): A description for the job. Maximum 512 characters. Defaults to None.
 
         Returns:
             Union[List, pd.DataFrame, pl.DataFrame, str]: The results of the inference.
 
         """
+        # Validate name and description lengths
+        if name is not None and len(name) > JOB_NAME_CHAR_LIMIT:
+            raise ValueError(f"Job name cannot exceed {JOB_NAME_CHAR_LIMIT} characters.")
+        if description is not None and len(description) > JOB_DESCRIPTION_CHAR_LIMIT:
+            raise ValueError(f"Job description cannot exceed {JOB_DESCRIPTION_CHAR_LIMIT} characters.")
+
         if isinstance(model, list) == False:
             model_list = [model]
             stay_attached = (
