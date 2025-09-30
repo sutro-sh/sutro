@@ -159,6 +159,36 @@ class Sutro:
         """
         self.api_key = api_key
 
+    def handle_column_helper(self, data: Union[pd.DataFrame, pl.DataFrame], column: Union[str, List[str]]):
+        try:
+            if isinstance(data, pd.DataFrame):
+                series_parts = []
+                for p in column:
+                    if p in data.columns:
+                        s = data[p].astype("string").fillna("")
+                    else:
+                        # Treat as a literal separator
+                        s = pd.Series([p] * len(data), index=data.index, dtype="string")
+                    series_parts.append(s)
+
+                out = series_parts[0]
+                for s in series_parts[1:]:
+                    out = out.str.cat(s, na_rep="")
+
+                return out.tolist()
+            elif isinstance(data, pl.DataFrame):
+                exprs = []
+                for p in column:
+                    if p in data.columns:
+                        exprs.append(pl.col(p).cast(pl.Utf8).fill_null(""))
+                    else:
+                        exprs.append(pl.lit(p))
+
+                result = data.select(pl.concat_str(exprs, separator="", ignore_nulls=False).alias("concat"))
+                return result["concat"].to_list()
+        except Exception as e:
+            raise ValueError(f"Error handling column concatentation: {e}")
+
     def handle_data_helper(
         self, data: Union[List, pd.DataFrame, pl.DataFrame, str], column: str = None
     ):
@@ -167,7 +197,10 @@ class Sutro:
         elif isinstance(data, (pd.DataFrame, pl.DataFrame)):
             if column is None:
                 raise ValueError("Column name must be specified for DataFrame input")
-            input_data = data[column].to_list()
+            if isinstance(column, list):
+                input_data = self.handle_column_helper(data, column)
+            elif isinstance(column, str):
+                input_data = data[column].to_list()
         elif isinstance(data, str):
             if data.startswith("dataset-"):
                 input_data = data + ":" + column
@@ -212,7 +245,7 @@ class Sutro:
         self,
         data: Union[List, pd.DataFrame, pl.DataFrame, str],
         model: ModelOptions,
-        column: str,
+        column: Union[str, List[str]],
         output_column: str,
         job_priority: int,
         json_schema: Dict[str, Any],
@@ -462,7 +495,7 @@ class Sutro:
         data: Union[List, pd.DataFrame, pl.DataFrame, str],
         model: Union[ModelOptions, List[ModelOptions]] = "gemma-3-12b-it",
         name: Union[str, List[str]] = None,
-        column: str = None,
+        column: Union[str, List[str]] = None,
         output_column: str = "inference_result",
         job_priority: int = 0,
         output_schema: Union[Dict[str, Any], BaseModel] = None,
@@ -483,7 +516,7 @@ class Sutro:
             data (Union[List, pd.DataFrame, pl.DataFrame, str]): The data to run inference on.
             model (Union[ModelOptions, List[ModelOptions]], optional): The model(s) to use for inference. Defaults to "llama-3.1-8b". You can pass a single model or a list of models. In the case of a list, the inference will be run in parallel for each model and stay_attached will be set to False.
             name (str, optional): A job name for experiment/metadata tracking purposes. If using a list of models, you must pass a list of names with length equal to the number of models, or None. Defaults to None.
-            column (str, optional): The column name to use for inference. Required if data is a DataFrame, file path, or dataset.
+            column (str, optional): The column name to use for inference. Required if data is a DataFrame, file path, or dataset. If a list is supplied, it will concatenate the columns of the list into a single column, accepting separator strings.
             output_column (str, optional): The column name to store the inference results in if the input is a DataFrame. Defaults to "inference_result".
             job_priority (int, optional): The priority of the job. Defaults to 0.
             output_schema (Union[Dict[str, Any], BaseModel], optional): A structured schema for the output.
