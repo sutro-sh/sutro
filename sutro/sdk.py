@@ -13,7 +13,19 @@ from tqdm import tqdm
 import time
 from pydantic import BaseModel
 import pyarrow.parquet as pq
+from urllib.parse import urlparse, parse_qs, unquote, quote
+
+import boto3
+from botocore.config import Config
 import shutil
+import io
+import re
+
+
+_S3_URI_RE = re.compile(
+    r"^s3://(?P<bucket>[a-z0-9][a-z0-9.-]{1,61}[a-z0-9])/"
+    r"(?P<key>[^?#]+)(?:\?(?P<q>[^#]*))?(?:#.*)?$"
+)
 
 
 class JobStatus(str, Enum):
@@ -454,6 +466,262 @@ class Sutro:
             return None
         return None
 
+    def isS3uri(self, data: Any) -> bool:
+        """
+        True iff `data` is a valid s3-style URI (bucket + non-empty key).
+        Accepts query string overrides that your presigner understands.
+        """
+        if not isinstance(data, str):
+            return False
+        m = _S3_URI_RE.match(data)
+        if not m:
+            return False
+        # Ensure key isn't just slashes after strip
+        key = m.group("key").lstrip("/")
+        return key != ""
+
+    def isRawDataset(self, data: Any) -> bool:
+        """
+        True iff `data` is one of:
+        - list (sequence of records/values)
+        - pandas.DataFrame
+        - polars.DataFrame
+        """
+        if isinstance(data, list):
+            return True
+        if isinstance(data, pd.DataFrame):
+            return True
+        if isinstance(data, pl.DataFrame):
+            return True
+        return False
+
+    def _serialize_for_upload(self, data: Any) -> tuple[bytes, str]:
+        """
+        Serialize supported data into bytes and return (payload, content_type).
+        - list -> JSON (UTF-8)
+        - pandas/pl DataFrame -> Parquet (snappy) via pyarrow
+        - bytes/bytearray/memoryview -> passthrough
+        - str -> UTF-8 text
+        """
+        if isinstance(data, (bytes, bytearray, memoryview)):
+            return (bytes(data), "application/octet-stream")
+        if isinstance(data, str):
+            return (data.encode("utf-8"), "text/plain; charset=utf-8")
+        if isinstance(data, list):
+            payload = json.dumps(data, separators=(",", ":")).encode("utf-8")
+            return (payload, "application/json")
+        if isinstance(data, pd.DataFrame):
+            buf = io.BytesIO()
+            data.to_parquet(buf, index=False)  # pyarrow engine auto-chosen
+            return (buf.getvalue(), "application/octet-stream")
+        if isinstance(data, pl.DataFrame):
+            buf = io.BytesIO()
+            data.write_parquet(buf)
+            return (buf.getvalue(), "application/octet-stream")
+        raise TypeError("Unsupported data type for upload")
+
+    def presign_s3_uri_write(
+        self,
+        data: Any,
+        *,
+        presign_endpoint: str | None = None,
+        timeout_s: float = 10.0,
+    ) -> dict:
+        """
+        Ask an external service for a presigned *upload* URL (PUT).
+
+        Contract: the external API accepts JSON with at least:
+        {"intent":"put","hint":"s3","meta": {...}}
+        and returns JSON containing:
+        {"url": "<presigned_put_url>", "headers": {...}}  # headers optional
+
+        The service URL is taken from `presign_endpoint` or
+        env var `PRESIGN_UPLOAD_ENDPOINT`.
+
+        Returns:
+            {"url": str, "headers": dict}
+        """
+        endpoint = presign_endpoint or os.getenv("PRESIGN_UPLOAD_ENDPOINT")
+        if not endpoint:
+            raise RuntimeError("Missing presign endpoint configuration")
+
+        # Provide minimal hints so the presigner can choose bucket/key.
+        # If `data` is already an s3:// URI, pass it through as a hint.
+        hint = data if self.isS3uri(data) else None
+        meta: dict[str, Any] = {}
+        if hint is not None:
+            meta["uri"] = hint
+
+        req = {"intent": "put", "hint": "s3", "meta": meta}
+        resp = requests.post(endpoint, json=req, timeout=timeout_s)
+        resp.raise_for_status()
+        body = resp.json()
+
+        url = body.get("url")
+        headers = body.get("headers") or {}
+        if not isinstance(url, str) or not url:
+            raise ValueError("Presign service returned an invalid URL")
+        if not isinstance(headers, dict):
+            raise ValueError("Presign service returned invalid headers")
+
+        return {"url": url, "headers": headers}
+
+    def upload(
+        self,
+        presigned: str | dict,
+        data: Any,
+        *,
+        timeout_s: float = 60.0,
+    ) -> requests.Response:
+        """
+        Upload `data` to the provided presigned PUT URL.
+
+        `presigned` may be:
+        - str URL, or
+        - {"url": str, "headers": dict}
+
+        Returns:
+            `requests.Response` so callers can inspect status/headers.
+        """
+        if isinstance(presigned, str):
+            url = presigned
+            hdrs: dict[str, str] = {}
+        elif isinstance(presigned, dict):
+            url_val = presigned.get("url")
+            if not isinstance(url_val, str) or not url_val:
+                raise ValueError("Invalid presigned descriptor (missing url)")
+            url = url_val
+            raw_hdrs = presigned.get("headers") or {}
+            if not isinstance(raw_hdrs, dict):
+                raise ValueError("Invalid presigned headers")
+            hdrs = {str(k): str(v) for k, v in raw_hdrs.items()}
+        else:
+            raise TypeError("presigned must be str or dict")
+
+        payload, content_type = self._serialize_for_upload(data)
+        hdrs = {"Content-Type": content_type, **hdrs}
+
+        # Use PUT for S3-style presigned uploads
+        resp = requests.put(url, data=payload, headers=hdrs, timeout=timeout_s)
+
+        # S3 returns 200/201/204 depending on the backend; treat <400 as OK.
+        if resp.status_code >= 400:
+            # Surface the error body for quicker debugging upstream.
+            raise RuntimeError(f"Upload failed: {resp.status_code} {resp.text[:256]}")
+
+        return resp
+
+    def presign_s3_uri_read(
+        self,
+        uri: str,
+        *,
+        expires_in: int = 3600,
+        endpoint_url: str | None = None,
+        region_name: str | None = None,
+        access_key: str | None = None,
+        secret_key: str | None = None,
+        session_token: str | None = None,
+        force_path_style: bool | None = None,
+        extra_params: dict | None = None,
+    ) -> str:
+        """
+        Presign a GET Object URL for an s3-style URI.
+
+        Works with AWS S3 and S3-compatible stores like Cloudflare R2, MinIO,
+        and Ceph RGW.
+
+        Args:
+            uri: 's3://bucket/key' (may include overrides in query string).
+            expires_in: Expiry time in seconds (default: 3600).
+            endpoint_url: S3-compatible endpoint (optional).
+            region_name: AWS region name or 'auto' for R2 (optional).
+            access_key: Explicit AWS/S3 access key (optional).
+            secret_key: Explicit AWS/S3 secret key (optional).
+            session_token: Optional AWS session token.
+            force_path_style: Force path-style addressing (optional).
+            extra_params: Extra request params (e.g., ResponseContentType).
+
+        Returns:
+            Presigned HTTPS URL.
+        """
+
+        if not uri.lower().startswith("s3://"):
+            raise ValueError(f"Unsupported URI scheme (expected s3://): {uri}")
+
+        parsed = urlparse(uri)
+        bucket = parsed.netloc
+        if not bucket:
+            raise ValueError(f"Missing bucket in URI: {uri}")
+
+        raw_key = unquote(parsed.path.lstrip("/"))
+        if raw_key == "":
+            raise ValueError("Object key is empty")
+
+        qs = {
+            k: v[-1] for k, v in parse_qs(parsed.query, keep_blank_values=True).items()
+        }
+
+        endpoint_url = (
+            endpoint_url
+            or qs.get("endpoint")
+            or qs.get("endpoint_url")
+            or os.getenv("S3_ENDPOINT_URL")
+            or os.getenv("AWS_S3_ENDPOINT")
+        )
+        region_name = (
+            region_name
+            or qs.get("region")
+            or os.getenv("AWS_REGION")
+            or os.getenv("AWS_DEFAULT_REGION")
+        )
+
+        qp_path_style = qs.get("path_style")
+        if force_path_style is None:
+            if qp_path_style is not None:
+                force_path_style = qp_path_style.strip().lower() in (
+                    "1",
+                    "true",
+                    "yes",
+                    "y",
+                )
+            else:
+                force_path_style = (
+                    False
+                    if endpoint_url
+                    and ".amazonaws.com" in urlparse(endpoint_url).netloc
+                    else True
+                )
+
+        access_key = access_key or qs.get("ak") or os.getenv("AWS_ACCESS_KEY_ID")
+        secret_key = secret_key or qs.get("sk") or os.getenv("AWS_SECRET_ACCESS_KEY")
+        session_token = session_token or qs.get("st") or os.getenv("AWS_SESSION_TOKEN")
+
+        session_kwargs: dict = {}
+        if access_key and secret_key:
+            session_kwargs["aws_access_key_id"] = access_key
+            session_kwargs["aws_secret_access_key"] = secret_key
+            if session_token:
+                session_kwargs["aws_session_token"] = session_token
+
+        config = Config(
+            signature_version="s3v4",
+            s3={"addressing_style": "path" if force_path_style else "virtual"},
+        )
+
+        session = boto3.session.Session(region_name=region_name, **session_kwargs)
+        s3 = session.client("s3", endpoint_url=endpoint_url, config=config)
+
+        key = quote(raw_key, safe="/~")
+        params = {"Bucket": bucket, "Key": key}
+        if extra_params:
+            params.update(extra_params)
+
+        return s3.generate_presigned_url(
+            ClientMethod="get_object",
+            Params=params,
+            ExpiresIn=int(expires_in),
+        )
+
     def infer(
         self,
         data: Union[List, pd.DataFrame, pl.DataFrame, str],
@@ -517,6 +785,15 @@ class Sutro:
                 )
         else:
             json_schema = None
+
+        if self.isS3uri(data):
+            data = self.presign_s3_uri_read(data)
+        elif self.isRawDataset(data):
+            presigned_uri, dataset_id = self.presign_s3_uri_write(data)
+            self.upload(presigned_uri, data)
+            data = dataset_id
+        else:
+            raise ValueError("Invalid data.")
 
         results = []
         for model in model_list:
@@ -983,7 +1260,7 @@ class Sutro:
                 results_df = results_df.drop(
                     [output_column, "output_column_json_decoded"]
                 )
-            except Exception as e:
+            except Exception:
                 # if the first row cannot be json decoded, do nothing
                 pass
 

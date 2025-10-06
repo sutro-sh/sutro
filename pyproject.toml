@@ -25,6 +25,8 @@ dependencies = [
     "tqdm==4.67.1",
     "pydantic==2.11.4",
     "pyarrow==21.0.0",
+    "boto3==1.35.36", 
+    "botocore==1.35.36", 
 ]
 
 [project.optional-dependencies]
