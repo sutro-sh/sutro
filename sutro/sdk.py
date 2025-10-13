@@ -489,7 +489,21 @@ class Sutro:
 
                 results = job_results_response.json()["results"]["outputs"]
 
-                spinner.write(
+                if isinstance(data, (pd.DataFrame, pl.DataFrame)):
+                    if isinstance(data, pd.DataFrame):
+                        data[output_column] = results
+                    elif isinstance(data, pl.DataFrame):
+                        data = data.with_columns(pl.Series(output_column, results))
+                    print(data)
+                    spinner.write(
+                        to_colored_text(
+                            f"✔ Displaying result preview. You can join the results on the original dataframe with `so.get_job_results('{job_id}', with_original_df=<original_df>)`",
+                            state="success",
+                        )
+                    )
+                else:
+                    print(results)
+                    spinner.write(
                     to_colored_text(
                         f"✔ Job results received. You can re-obtain the results with `so.get_job_results('{job_id}')`",
                         state="success",
@@ -497,14 +511,7 @@ class Sutro:
                 )
                 spinner.stop()
 
-                if isinstance(data, (pd.DataFrame, pl.DataFrame)):
-                    if isinstance(data, pd.DataFrame):
-                        data[output_column] = results
-                    elif isinstance(data, pl.DataFrame):
-                        data = data.with_columns(pl.Series(output_column, results))
-                    return data
-
-                return results
+                return job_id
             return None
         return None
 
@@ -549,7 +556,7 @@ class Sutro:
             truncate_rows (bool, optional): If True, any rows that have a token count exceeding the context window length of the selected model will be truncated to the max length that will fit within the context window. Defaults to False.
 
         Returns:
-            Union[List, pd.DataFrame, pl.DataFrame, str]: The results of the inference.
+            str: The ID of the inference job.
 
         """
         if isinstance(model, list) == False:
