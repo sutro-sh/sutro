@@ -14,6 +14,7 @@ import time
 from pydantic import BaseModel
 import pyarrow.parquet as pq
 import shutil
+import importlib.metadata
 
 JOB_NAME_CHAR_LIMIT = 45
 JOB_DESCRIPTION_CHAR_LIMIT = 512
@@ -85,7 +86,7 @@ ModelOptions = Literal[
 
 
 def to_colored_text(
-    text: str, state: Optional[Literal["success", "fail"]] = None
+    text: str, state: Optional[Literal["success", "fail", "callout"]] = None
 ) -> str:
     """
     Apply color to text based on state.
@@ -103,6 +104,8 @@ def to_colored_text(
             return f"{Fore.GREEN}{text}{Style.RESET_ALL}"
         case "fail":
             return f"{Fore.RED}{text}{Style.RESET_ALL}"
+        case "callout":
+            return f"{Fore.MAGENTA}{text}{Style.RESET_ALL}"
         case _:
             # Default to blue for normal/processing states
             return f"{Fore.BLUE}{text}{Style.RESET_ALL}"
@@ -124,6 +127,34 @@ class Sutro:
     def __init__(self, api_key: str = None, base_url: str = "https://api.sutro.sh/"):
         self.api_key = api_key or self.check_for_api_key()
         self.base_url = base_url
+        self.check_version("sutro")
+
+    def check_version(self, package_name: str):
+        try:
+            # Local version
+            local_version = importlib.metadata.version(package_name)
+        except importlib.metadata.PackageNotFoundError:
+            print(f"{package_name} is not installed.")
+            return
+
+        try:
+            # Latest release from PyPI
+            resp = requests.get(f"https://pypi.org/pypi/{package_name}/json", timeout=2)
+            resp.raise_for_status()
+            latest_version = resp.json()["info"]["version"]
+
+            if local_version != latest_version:
+                msg = (f"⚠️  You are using {package_name} {local_version}, "
+                    f"but the latest release is {latest_version}. "
+                    f"Run `[uv] pip install -U {package_name}` to upgrade.")
+                print(to_colored_text(
+                        msg,
+                        state="callout"
+                    )
+                )
+        except Exception as e:
+            # Fail silently or log, you don’t want this blocking usage
+            pass
 
     def check_for_api_key(self):
         """

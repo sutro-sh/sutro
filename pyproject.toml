@@ -1,6 +1,6 @@
 [build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+requires = ["uv_build>=0.7.19,<=0.9.2"]
+build-backend = "uv_build"
 
 [tool.hatch.env]
 requires = ["pip"]
@@ -39,16 +39,14 @@ sutro = "sutro.cli:cli"
 "Homepage" = "https://sutro.sh"
 "Documentation" = "https://docs.sutro.sh"
 
-[tool.hatch.build.targets.wheel]
-packages = ["sutro"]
-
-[tool.hatch.build.targets.sdist]
-include = [
+[tool.uv.build-backend]
+module-root = "."
+source-include = [
     "sutro",
     "README.md",
     "LICENSE",
 ]
-exclude = [
+source-exclude = [
     "demo_data",
     "demo.py",
     ".gitignore",
