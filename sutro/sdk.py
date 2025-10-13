@@ -166,7 +166,10 @@ class Sutro:
         """
         self.api_key = api_key
 
-    def handle_column_helper(self, data: Union[pd.DataFrame, pl.DataFrame], column: Union[str, List[str]]):
+    def do_dataframe_column_concatenation(self, data: Union[pd.DataFrame, pl.DataFrame], column: Union[str, List[str]]):
+        """
+        If the user has supplied a dataframe and a list of columns, this will intelligenly concatenate the columns into a single column, accepting separator strings.
+        """
         try:
             if isinstance(data, pd.DataFrame):
                 series_parts = []
@@ -205,7 +208,7 @@ class Sutro:
             if column is None:
                 raise ValueError("Column name must be specified for DataFrame input")
             if isinstance(column, list):
-                input_data = self.handle_column_helper(data, column)
+                input_data = self.do_dataframe_column_concatenation(data, column)
             elif isinstance(column, str):
                 input_data = data[column].to_list()
         elif isinstance(data, str):
