@@ -15,6 +15,8 @@ from pydantic import BaseModel
 import pyarrow.parquet as pq
 import shutil
 
+JOB_NAME_CHAR_LIMIT = 45
+JOB_DESCRIPTION_CHAR_LIMIT = 512
 
 class JobStatus(str, Enum):
     """Job statuses that will be returned by the API & SDK"""
@@ -62,15 +64,20 @@ ModelOptions = Literal[
     "llama-3.3-70b",
     "llama-3.3-70b",
     "qwen-3-4b",
+    "qwen-3-14b",
     "qwen-3-32b",
+    "qwen-3-30b-a3b",
+    "qwen-3-235b-a22b",
     "qwen-3-4b-thinking",
+    "qwen-3-14b-thinking",
     "qwen-3-32b-thinking",
-    "gemma-3-4b-it",
-    "gemma-3-27b-it",
-    "gpt-oss-120b",
-    "gpt-oss-20b",
     "qwen-3-235b-a22b-thinking",
     "qwen-3-30b-a3b-thinking",
+    "gemma-3-4b-it",
+    "gemma-3-12b-it",
+    "gemma-3-27b-it",
+    "gpt-oss-20b",
+    "gpt-oss-120b",
     "qwen-3-embedding-0.6b",
     "qwen-3-embedding-6b",
     "qwen-3-embedding-8b",
@@ -159,6 +166,39 @@ class Sutro:
         """
         self.api_key = api_key
 
+    def do_dataframe_column_concatenation(self, data: Union[pd.DataFrame, pl.DataFrame], column: Union[str, List[str]]):
+        """
+        If the user has supplied a dataframe and a list of columns, this will intelligenly concatenate the columns into a single column, accepting separator strings.
+        """
+        try:
+            if isinstance(data, pd.DataFrame):
+                series_parts = []
+                for p in column:
+                    if p in data.columns:
+                        s = data[p].astype("string").fillna("")
+                    else:
+                        # Treat as a literal separator
+                        s = pd.Series([p] * len(data), index=data.index, dtype="string")
+                    series_parts.append(s)
+
+                out = series_parts[0]
+                for s in series_parts[1:]:
+                    out = out.str.cat(s, na_rep="")
+
+                return out.tolist()
+            elif isinstance(data, pl.DataFrame):
+                exprs = []
+                for p in column:
+                    if p in data.columns:
+                        exprs.append(pl.col(p).cast(pl.Utf8).fill_null(""))
+                    else:
+                        exprs.append(pl.lit(p))
+
+                result = data.select(pl.concat_str(exprs, separator="", ignore_nulls=False).alias("concat"))
+                return result["concat"].to_list()
+        except Exception as e:
+            raise ValueError(f"Error handling column concatentation: {e}")
+
     def handle_data_helper(
         self, data: Union[List, pd.DataFrame, pl.DataFrame, str], column: str = None
     ):
@@ -167,7 +207,10 @@ class Sutro:
         elif isinstance(data, (pd.DataFrame, pl.DataFrame)):
             if column is None:
                 raise ValueError("Column name must be specified for DataFrame input")
-            input_data = data[column].to_list()
+            if isinstance(column, list):
+                input_data = self.do_dataframe_column_concatenation(data, column)
+            elif isinstance(column, str):
+                input_data = data[column].to_list()
         elif isinstance(data, str):
             if data.startswith("dataset-"):
                 input_data = data + ":" + column
@@ -212,7 +255,7 @@ class Sutro:
         self,
         data: Union[List, pd.DataFrame, pl.DataFrame, str],
         model: ModelOptions,
-        column: str,
+        column: Union[str, List[str]],
         output_column: str,
         job_priority: int,
         json_schema: Dict[str, Any],
@@ -222,7 +265,15 @@ class Sutro:
         stay_attached: Optional[bool],
         random_seed_per_input: bool,
         truncate_rows: bool,
+        name: str,
+        description: str,
     ):
+        # Validate name and description lengths
+        if name is not None and len(name) > JOB_NAME_CHAR_LIMIT:
+            raise ValueError(f"Job name cannot exceed {JOB_NAME_CHAR_LIMIT} characters.")
+        if description is not None and len(description) > JOB_DESCRIPTION_CHAR_LIMIT:
+            raise ValueError(f"Job description cannot exceed {JOB_DESCRIPTION_CHAR_LIMIT} characters.")
+
         input_data = self.handle_data_helper(data, column)
         endpoint = f"{self.base_url}/batch-inference"
         headers = {
@@ -239,6 +290,8 @@ class Sutro:
             "sampling_params": sampling_params,
             "random_seed_per_input": random_seed_per_input,
             "truncate_rows": truncate_rows,
+            "name": name,
+            "description": description,
         }
 
         # There are two gotchas with yaspin:
@@ -284,9 +337,10 @@ class Sutro:
                         )
                         return job_id
                     else:
+                        name_text = f" and name {name}" if name is not None else ""
                         spinner.write(
                             to_colored_text(
-                                f"🛠 Priority {job_priority} Job created with ID: {job_id}.",
+                                f"🛠 Priority {job_priority} Job created with ID: {job_id}{name_text}.",
                                 state="success",
                             )
                         )
@@ -458,7 +512,9 @@ class Sutro:
         self,
         data: Union[List, pd.DataFrame, pl.DataFrame, str],
         model: Union[ModelOptions, List[ModelOptions]] = "gemma-3-12b-it",
-        column: str = None,
+        name: Union[str, List[str]] = None,
+        description: Union[str, List[str]] = None,
+        column: Union[str, List[str]] = None,
         output_column: str = "inference_result",
         job_priority: int = 0,
         output_schema: Union[Dict[str, Any], BaseModel] = None,
@@ -478,7 +534,9 @@ class Sutro:
         Args:
             data (Union[List, pd.DataFrame, pl.DataFrame, str]): The data to run inference on.
             model (Union[ModelOptions, List[ModelOptions]], optional): The model(s) to use for inference. Defaults to "llama-3.1-8b". You can pass a single model or a list of models. In the case of a list, the inference will be run in parallel for each model and stay_attached will be set to False.
-            column (str, optional): The column name to use for inference. Required if data is a DataFrame, file path, or dataset.
+            name (Union[str, List[str]], optional): A job name for experiment/metadata tracking purposes. If using a list of models, you must pass a list of names with length equal to the number of models, or None. Defaults to None.
+            description (Union[str, List[str]], optional): A job description for experiment/metadata tracking purposes. If using a list of models, you must pass a list of descriptions with length equal to the number of models, or None. Defaults to None.
+            column (Union[str, List[str]], optional): The column name to use for inference. Required if data is a DataFrame, file path, or dataset. If a list is supplied, it will concatenate the columns of the list into a single column, accepting separator strings.
             output_column (str, optional): The column name to store the inference results in if the input is a DataFrame. Defaults to "inference_result".
             job_priority (int, optional): The priority of the job. Defaults to 0.
             output_schema (Union[Dict[str, Any], BaseModel], optional): A structured schema for the output.
@@ -503,6 +561,30 @@ class Sutro:
             model_list = model
             stay_attached = False
 
+        if isinstance(model_list, list):
+            if isinstance(name, list):
+                if len(name) != len(model_list):
+                    raise ValueError("Name list must be the same length as the model list.")
+                name_list = name
+            elif isinstance(name, str):
+                raise ValueError("Name must be a list if using a list of models.")
+        else:
+            if isinstance(name, list):
+                raise ValueError("Name must be a string or None if using a single model.")
+            name_list = [name]
+
+        if isinstance(model_list, list):
+            if isinstance(description, list):
+                if len(description) != len(model_list):
+                    raise ValueError("Descriptions list must be the same length as the model list.")
+                description_list = description
+            elif isinstance(description, str):
+                raise ValueError("Description must be a list if using a list of models.")
+        else:
+            if isinstance(name, list):
+                raise ValueError("Description must be a string or None if using a single model.")
+            description_list = [description]
+
         # Convert BaseModel to dict if needed
         if output_schema is not None:
             if hasattr(
@@ -517,12 +599,12 @@ class Sutro:
                 )
         else:
             json_schema = None
-
+        
         results = []
-        for model in model_list:
+        for i in range(len(model_list)):
             res = self._run_one_batch_inference(
                 data,
-                model,
+                model_list[i],
                 column,
                 output_column,
                 job_priority,
@@ -533,6 +615,8 @@ class Sutro:
                 stay_attached,
                 random_seed_per_input,
                 truncate_rows,
+                name_list[i],
+                description_list[i],
             )
             results.append(res)
 
