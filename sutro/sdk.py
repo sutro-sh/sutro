@@ -1486,7 +1486,7 @@ class Sutro:
             timeout (Optional[int]): The max time in seconds the function should wait for job results for. Default is 7200 (2 hours).
 
         Returns:
-            list: The results of the job.
+            pl.DataFrame: The results of the job in a polars DataFrame.
         """
         POLL_INTERVAL = 5
 
