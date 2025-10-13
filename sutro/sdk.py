@@ -606,6 +606,8 @@ class Sutro:
                 name_list = name
             elif isinstance(name, str):
                 raise ValueError("Name must be a list if using a list of models.")
+            elif name is None:
+                name_list = [None] * len(model_list)
         else:
             if isinstance(name, list):
                 raise ValueError("Name must be a string or None if using a single model.")
@@ -618,6 +620,8 @@ class Sutro:
                 description_list = description
             elif isinstance(description, str):
                 raise ValueError("Description must be a list if using a list of models.")
+            elif description is None:
+                description_list = [None] * len(model_list)
         else:
             if isinstance(name, list):
                 raise ValueError("Description must be a string or None if using a single model.")
@@ -1085,29 +1089,39 @@ class Sutro:
         results_df = results_df.select(columns_to_keep)
 
         if unpack_json:
-            try:
-                first_row = json.loads(
-                    results_df.head(1)[output_column][0]
-                )  # checks if the first row can be json decoded
+            # try:
+            first_row = json.loads(
+                results_df.head(1)[output_column][0]
+            )  # checks if the first row can be json decoded
+            results_df = results_df.with_columns(
+                pl.col(output_column)
+                .str.json_decode()
+                .alias("output_column_json_decoded")
+            )
+            json_decoded_fields = first_row.keys()
+            for field in json_decoded_fields:
                 results_df = results_df.with_columns(
-                    pl.col(output_column)
-                    .str.json_decode()
-                    .alias("output_column_json_decoded")
+                    pl.col("output_column_json_decoded")
+                    .struct.field(field)
+                    .alias(field)
                 )
-                json_decoded_fields = first_row.keys()
-                for field in json_decoded_fields:
+            if sorted(list(set(json_decoded_fields))) == ['content', 'reasoning_content']:
+                content_keys = results_df.head(1)['content'][0].keys()
+                for key in content_keys:
                     results_df = results_df.with_columns(
-                        pl.col("output_column_json_decoded")
-                        .struct.field(field)
-                        .alias(field)
+                        pl.col("content")
+                        .struct.field(key)
+                        .alias(key)
                     )
-                # drop the output_column and the json decoded column
-                results_df = results_df.drop(
-                    [output_column, "output_column_json_decoded"]
-                )
-            except Exception as e:
+                # drop the content column
+                results_df = results_df.drop("content")
+            # drop the output_column and the json decoded column
+            results_df = results_df.drop(
+                [output_column, "output_column_json_decoded"]
+            )
+            # except Exception as e:
                 # if the first row cannot be json decoded, do nothing
-                pass
+                # pass
 
         # Handle concatenation with original DataFrame
         if with_original_df is not None:
