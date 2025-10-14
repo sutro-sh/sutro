@@ -14,6 +14,7 @@ import time
 from pydantic import BaseModel
 import pyarrow.parquet as pq
 import shutil
+import importlib.metadata
 
 JOB_NAME_CHAR_LIMIT = 45
 JOB_DESCRIPTION_CHAR_LIMIT = 512
@@ -85,7 +86,7 @@ ModelOptions = Literal[
 
 
 def to_colored_text(
-    text: str, state: Optional[Literal["success", "fail"]] = None
+    text: str, state: Optional[Literal["success", "fail", "callout"]] = None
 ) -> str:
     """
     Apply color to text based on state.
@@ -103,6 +104,8 @@ def to_colored_text(
             return f"{Fore.GREEN}{text}{Style.RESET_ALL}"
         case "fail":
             return f"{Fore.RED}{text}{Style.RESET_ALL}"
+        case "callout":
+            return f"{Fore.MAGENTA}{text}{Style.RESET_ALL}"
         case _:
             # Default to blue for normal/processing states
             return f"{Fore.BLUE}{text}{Style.RESET_ALL}"
@@ -124,6 +127,34 @@ class Sutro:
     def __init__(self, api_key: str = None, base_url: str = "https://api.sutro.sh/"):
         self.api_key = api_key or self.check_for_api_key()
         self.base_url = base_url
+        self.check_version("sutro")
+
+    def check_version(self, package_name: str):
+        try:
+            # Local version
+            local_version = importlib.metadata.version(package_name)
+        except importlib.metadata.PackageNotFoundError:
+            print(f"{package_name} is not installed.")
+            return
+
+        try:
+            # Latest release from PyPI
+            resp = requests.get(f"https://pypi.org/pypi/{package_name}/json", timeout=2)
+            resp.raise_for_status()
+            latest_version = resp.json()["info"]["version"]
+
+            if local_version != latest_version:
+                msg = (f"⚠️  You are using {package_name} {local_version}, "
+                    f"but the latest release is {latest_version}. "
+                    f"Run `[uv] pip install -U {package_name}` to upgrade.")
+                print(to_colored_text(
+                        msg,
+                        state="callout"
+                    )
+                )
+        except Exception as e:
+            # Fail silently or log, you don’t want this blocking usage
+            pass
 
     def check_for_api_key(self):
         """
@@ -489,7 +520,21 @@ class Sutro:
 
                 results = job_results_response.json()["results"]["outputs"]
 
-                spinner.write(
+                if isinstance(data, (pd.DataFrame, pl.DataFrame)):
+                    if isinstance(data, pd.DataFrame):
+                        data[output_column] = results
+                    elif isinstance(data, pl.DataFrame):
+                        data = data.with_columns(pl.Series(output_column, results))
+                    print(data)
+                    spinner.write(
+                        to_colored_text(
+                            f"✔ Displaying result preview. You can join the results on the original dataframe with `so.get_job_results('{job_id}', with_original_df=<original_df>)`",
+                            state="success",
+                        )
+                    )
+                else:
+                    print(results)
+                    spinner.write(
                     to_colored_text(
                         f"✔ Job results received. You can re-obtain the results with `so.get_job_results('{job_id}')`",
                         state="success",
@@ -497,14 +542,7 @@ class Sutro:
                 )
                 spinner.stop()
 
-                if isinstance(data, (pd.DataFrame, pl.DataFrame)):
-                    if isinstance(data, pd.DataFrame):
-                        data[output_column] = results
-                    elif isinstance(data, pl.DataFrame):
-                        data = data.with_columns(pl.Series(output_column, results))
-                    return data
-
-                return results
+                return job_id
             return None
         return None
 
@@ -523,7 +561,7 @@ class Sutro:
         dry_run: bool = False,
         stay_attached: Optional[bool] = None,
         random_seed_per_input: bool = False,
-        truncate_rows: bool = False,
+        truncate_rows: bool = True,
     ):
         """
         Run inference on the provided data.
@@ -546,10 +584,10 @@ class Sutro:
             dry_run (bool, optional): If True, the method will return cost estimates instead of running inference. Defaults to False.
             stay_attached (bool, optional): If True, the method will stay attached to the job until it is complete. Defaults to True for prototyping jobs, False otherwise.
             random_seed_per_input (bool, optional): If True, the method will use a different random seed for each input. Defaults to False.
-            truncate_rows (bool, optional): If True, any rows that have a token count exceeding the context window length of the selected model will be truncated to the max length that will fit within the context window. Defaults to False.
+            truncate_rows (bool, optional): If True, any rows that have a token count exceeding the context window length of the selected model will be truncated to the max length that will fit within the context window. Defaults to True.
 
         Returns:
-            Union[List, pd.DataFrame, pl.DataFrame, str]: The results of the inference.
+            str: The ID of the inference job.
 
         """
         if isinstance(model, list) == False:
@@ -568,6 +606,8 @@ class Sutro:
                 name_list = name
             elif isinstance(name, str):
                 raise ValueError("Name must be a list if using a list of models.")
+            elif name is None:
+                name_list = [None] * len(model_list)
         else:
             if isinstance(name, list):
                 raise ValueError("Name must be a string or None if using a single model.")
@@ -580,6 +620,8 @@ class Sutro:
                 description_list = description
             elif isinstance(description, str):
                 raise ValueError("Description must be a list if using a list of models.")
+            elif description is None:
+                description_list = [None] * len(model_list)
         else:
             if isinstance(name, list):
                 raise ValueError("Description must be a string or None if using a single model.")
@@ -1051,9 +1093,9 @@ class Sutro:
                 first_row = json.loads(
                     results_df.head(1)[output_column][0]
                 )  # checks if the first row can be json decoded
+                results_df = results_df.map_columns(output_column, lambda s: s.str.json_decode())
                 results_df = results_df.with_columns(
                     pl.col(output_column)
-                    .str.json_decode()
                     .alias("output_column_json_decoded")
                 )
                 json_decoded_fields = first_row.keys()
@@ -1063,7 +1105,15 @@ class Sutro:
                         .struct.field(field)
                         .alias(field)
                     )
-                # drop the output_column and the json decoded column
+                if sorted(list(set(json_decoded_fields))) == ['content', 'reasoning_content']: # if it's a reasoning model, we need to unpack the content field
+                    content_keys = results_df.head(1)['content'][0].keys()
+                    for key in content_keys:
+                        results_df = results_df.with_columns(
+                            pl.col("content")
+                            .struct.field(key)
+                            .alias(key)
+                        )
+                    results_df = results_df.drop("content")
                 results_df = results_df.drop(
                     [output_column, "output_column_json_decoded"]
                 )
@@ -1448,7 +1498,7 @@ class Sutro:
             timeout (Optional[int]): The max time in seconds the function should wait for job results for. Default is 7200 (2 hours).
 
         Returns:
-            list: The results of the job.
+            pl.DataFrame: The results of the job in a polars DataFrame.
         """
         POLL_INTERVAL = 5
 
