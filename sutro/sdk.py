@@ -15,6 +15,7 @@ from pydantic import BaseModel
 import pyarrow.parquet as pq
 import shutil
 import importlib.metadata
+from sutro import internal
 
 JOB_NAME_CHAR_LIMIT = 45
 JOB_DESCRIPTION_CHAR_LIMIT = 512
@@ -196,79 +197,6 @@ class Sutro:
             None
         """
         self.api_key = api_key
-
-    def do_dataframe_column_concatenation(self, data: Union[pd.DataFrame, pl.DataFrame], column: Union[str, List[str]]):
-        """
-        If the user has supplied a dataframe and a list of columns, this will intelligenly concatenate the columns into a single column, accepting separator strings.
-        """
-        try:
-            if isinstance(data, pd.DataFrame):
-                series_parts = []
-                for p in column:
-                    if p in data.columns:
-                        s = data[p].astype("string").fillna("")
-                    else:
-                        # Treat as a literal separator
-                        s = pd.Series([p] * len(data), index=data.index, dtype="string")
-                    series_parts.append(s)
-
-                out = series_parts[0]
-                for s in series_parts[1:]:
-                    out = out.str.cat(s, na_rep="")
-
-                return out.tolist()
-            elif isinstance(data, pl.DataFrame):
-                exprs = []
-                for p in column:
-                    if p in data.columns:
-                        exprs.append(pl.col(p).cast(pl.Utf8).fill_null(""))
-                    else:
-                        exprs.append(pl.lit(p))
-
-                result = data.select(pl.concat_str(exprs, separator="", ignore_nulls=False).alias("concat"))
-                return result["concat"].to_list()
-        except Exception as e:
-            raise ValueError(f"Error handling column concatentation: {e}")
-
-    def handle_data_helper(
-        self, data: Union[List, pd.DataFrame, pl.DataFrame, str], column: str = None
-    ):
-        if isinstance(data, list):
-            input_data = data
-        elif isinstance(data, (pd.DataFrame, pl.DataFrame)):
-            if column is None:
-                raise ValueError("Column name must be specified for DataFrame input")
-            if isinstance(column, list):
-                input_data = self.do_dataframe_column_concatenation(data, column)
-            elif isinstance(column, str):
-                input_data = data[column].to_list()
-        elif isinstance(data, str):
-            if data.startswith("dataset-"):
-                input_data = data + ":" + column
-            else:
-                file_ext = os.path.splitext(data)[1].lower()
-                if file_ext == ".csv":
-                    df = pl.read_csv(data)
-                elif file_ext == ".parquet":
-                    df = pl.read_parquet(data)
-                elif file_ext in [".txt", ""]:
-                    with open(data, "r") as file:
-                        input_data = [line.strip() for line in file]
-                else:
-                    raise ValueError(f"Unsupported file type: {file_ext}")
-
-                if file_ext in [".csv", ".parquet"]:
-                    if column is None:
-                        raise ValueError(
-                            "Column name must be specified for CSV/Parquet input"
-                        )
-                    input_data = df[column].to_list()
-        else:
-            raise ValueError(
-                "Unsupported data type. Please provide a list, DataFrame, or file path."
-            )
-
-        return input_data
 
     def set_base_url(self, base_url: str):
         """
@@ -668,6 +596,20 @@ class Sutro:
             return results[0]
 
         return None
+
+    def embed(
+        self,
+        data: Union[List, pd.DataFrame, pl.DataFrame, str],
+        model: ModelOptions = "qwen-3-embedding-0.6b",
+        name: Union[str, List[str]] = None,
+        description: Union[str, List[str]] = None,
+        column: Union[str, List[str]] = None,
+        job_priority: int = 0,
+        truncate_rows: bool = True,
+    ):
+        return internal.embed._embed_simple(
+            self, data, model, name, description, column, job_priority, truncate_rows
+        )
 
     def attach(self, job_id):
         """
