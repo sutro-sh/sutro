@@ -15,9 +15,9 @@ from pydantic import BaseModel
 import pyarrow.parquet as pq
 import shutil
 import importlib.metadata
-from sutro import templates
 from sutro.common import ModelOptions, handle_data_helper
-from sutro.templates.embed import EmbeddingModelOptions
+from sutro.interfaces import BaseSutroClient
+from sutro.templates.embed import EmbedTemplates
 
 JOB_NAME_CHAR_LIMIT = 45
 JOB_DESCRIPTION_CHAR_LIMIT = 512
@@ -100,7 +100,7 @@ def make_clickable_link(url, text=None):
     return f"\033]8;;{url}\033\\{text}\033]8;;\033\\"
 
 
-class Sutro:
+class Sutro(BaseSutroClient, EmbedTemplates):
     def __init__(self, api_key: str = None, base_url: str = "https://api.sutro.sh/"):
         self.api_key = api_key or self.check_for_api_key()
         self.base_url = base_url
@@ -585,50 +585,6 @@ class Sutro:
             return results[0]
 
         return None
-
-    def embed(
-        self,
-        data: Union[List, pd.DataFrame, pl.DataFrame, str],
-        model: EmbeddingModelOptions = "qwen-3-embedding-0.6b",
-        job_priority: int = 0,
-        name: Union[str, List[str]] = None,
-        description: Union[str, List[str]] = None,
-        output_column: str = "inference_result",
-        column: Union[str, List[str]] = None,
-        truncate_rows: bool = True,
-    ):
-        """
-        A simple template style function to generate embeddings for the provided data, with Sutro.
-
-        This method allows you to generate vector embeddings for the provided data using Sutro.
-        It supports various options for inputting data, such as lists, DatFrames (Polars or Pandas), file paths and datasets.
-        The method will wait for the embedding job to complete before returning the results.
-
-        Args:
-            data (Union[List, pd.DataFrame, pl.DataFrame, str]): The data to generate embeddings for.
-            model (ModelOptions, optional): The embedding model to use. Defaults to "qwen-3-embedding-0.6b"; a model we chose as its small & fast, yet performs well on a variety of tasks.
-            job_priority (int, optional): The priority of the job. Defaults to 0.
-            name (Union[str, List[str]], optional): A job name for experiment/metadata tracking purposes. Defaults to None.
-            description (Union[str, List[str]], optional): A job description for experiment/metadata tracking purposes. Defaults to None.
-            output_column (str, optional): The column name to store the embedding results in if the input is a DataFrame. Defaults to "inference_result".
-            column (Union[str, List[str]], optional): The column name to use for embedding generation. Required if data is a DataFrame, file path, or dataset. If a list is supplied, it will concatenate the columns of the list into a single column, accepting separator strings.
-            truncate_rows (bool, optional): If True, any rows that have a token count exceeding the context window length of the selected model will be truncated to the max length that will fit within the context window. Defaults to True.
-
-        Returns:
-            The completed embedding results for the provided data.
-
-        """
-        return templates.embed._embed_simple(
-            self,
-            data,
-            model,
-            name,
-            description,
-            column,
-            output_column,
-            job_priority,
-            truncate_rows,
-        )
 
     def attach(self, job_id):
         """
