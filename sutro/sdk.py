@@ -238,7 +238,7 @@ class Sutro:
         # Terminal size {self._terminal_width} is too small to display spinner with the given settings.
         # https://github.com/pavdmyt/yaspin/blob/9c7430b499ab4611888ece39783a870e4a05fa45/yaspin/core.py#L568-L571
         job_id = None
-        t = f"Creating {'[cost estimate] ' if cost_estimate else ''}priority {job_priority} job\nUsing {model}"
+        t = f"Creating {'[cost estimate] ' if cost_estimate else ''}priority {job_priority} job"
         spinner_text = to_colored_text(t)
         try:
             with yaspin(SPINNER, text=spinner_text, color=YASPIN_COLOR) as spinner:
@@ -277,10 +277,11 @@ class Sutro:
                         name_text = f" and name {name}" if name is not None else ""
                         spinner.write(
                             to_colored_text(
-                                f"🛠 Priority {job_priority} Job created with ID: {job_id}{name_text}.",
+                                f"🛠 Priority {job_priority} Job created with ID: {job_id}{name_text}",
                                 state="success",
                             )
                         )
+                        spinner.write(to_colored_text(f"Model: {model}"))
                         if not stay_attached:
                             clickable_link = make_clickable_link(
                                 f"https://app.sutro.sh/jobs/{job_id}"
