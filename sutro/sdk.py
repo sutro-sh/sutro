@@ -15,10 +15,13 @@ from pydantic import BaseModel
 import pyarrow.parquet as pq
 import shutil
 import importlib.metadata
-from sutro import internal
+from sutro import templates
+from sutro.common import ModelOptions
+from sutro.templates.embed import EmbeddingModelOptions
 
 JOB_NAME_CHAR_LIMIT = 45
 JOB_DESCRIPTION_CHAR_LIMIT = 512
+
 
 class JobStatus(str, Enum):
     """Job statuses that will be returned by the API & SDK"""
@@ -57,33 +60,6 @@ def is_jupyter() -> bool:
 # `color` param not supported in Jupyter notebooks
 YASPIN_COLOR = None if is_jupyter() else "blue"
 SPINNER = Spinners.dots14
-
-# Models available for inference.  Keep in sync with the backend configuration
-# so users get helpful autocompletion when selecting a model.
-ModelOptions = Literal[
-    "llama-3.2-3b",
-    "llama-3.1-8b",
-    "llama-3.3-70b",
-    "llama-3.3-70b",
-    "qwen-3-4b",
-    "qwen-3-14b",
-    "qwen-3-32b",
-    "qwen-3-30b-a3b",
-    "qwen-3-235b-a22b",
-    "qwen-3-4b-thinking",
-    "qwen-3-14b-thinking",
-    "qwen-3-32b-thinking",
-    "qwen-3-235b-a22b-thinking",
-    "qwen-3-30b-a3b-thinking",
-    "gemma-3-4b-it",
-    "gemma-3-12b-it",
-    "gemma-3-27b-it",
-    "gpt-oss-20b",
-    "gpt-oss-120b",
-    "qwen-3-embedding-0.6b",
-    "qwen-3-embedding-6b",
-    "qwen-3-embedding-8b",
-]
 
 
 def to_colored_text(
@@ -145,15 +121,13 @@ class Sutro:
             latest_version = resp.json()["info"]["version"]
 
             if local_version != latest_version:
-                msg = (f"⚠️  You are using {package_name} {local_version}, "
+                msg = (
+                    f"⚠️  You are using {package_name} {local_version}, "
                     f"but the latest release is {latest_version}. "
-                    f"Run `[uv] pip install -U {package_name}` to upgrade.")
-                print(to_colored_text(
-                        msg,
-                        state="callout"
-                    )
+                    f"Run `[uv] pip install -U {package_name}` to upgrade."
                 )
-        except Exception as e:
+                print(to_colored_text(msg, state="callout"))
+        except Exception:
             # Fail silently or log, you don’t want this blocking usage
             pass
 
@@ -229,9 +203,13 @@ class Sutro:
     ):
         # Validate name and description lengths
         if name is not None and len(name) > JOB_NAME_CHAR_LIMIT:
-            raise ValueError(f"Job name cannot exceed {JOB_NAME_CHAR_LIMIT} characters.")
+            raise ValueError(
+                f"Job name cannot exceed {JOB_NAME_CHAR_LIMIT} characters."
+            )
         if description is not None and len(description) > JOB_DESCRIPTION_CHAR_LIMIT:
-            raise ValueError(f"Job description cannot exceed {JOB_DESCRIPTION_CHAR_LIMIT} characters.")
+            raise ValueError(
+                f"Job description cannot exceed {JOB_DESCRIPTION_CHAR_LIMIT} characters."
+            )
 
         input_data = self.handle_data_helper(data, column)
         endpoint = f"{self.base_url}/batch-inference"
@@ -463,11 +441,11 @@ class Sutro:
                 else:
                     print(results)
                     spinner.write(
-                    to_colored_text(
-                        f"✔ Job results received. You can re-obtain the results with `so.get_job_results('{job_id}')`",
-                        state="success",
+                        to_colored_text(
+                            f"✔ Job results received. You can re-obtain the results with `so.get_job_results('{job_id}')`",
+                            state="success",
+                        )
                     )
-                )
                 spinner.stop()
 
                 return job_id
@@ -495,7 +473,7 @@ class Sutro:
         Run inference on the provided data.
 
         This method allows you to run inference on the provided data using the Sutro API.
-        It supports various data types such as lists, pandas DataFrames, polars DataFrames, file paths and datasets.
+        It supports various data types such as lists, DataFrames (Polars or Pandas), file paths and datasets.
 
         Args:
             data (Union[List, pd.DataFrame, pl.DataFrame, str]): The data to run inference on.
@@ -530,7 +508,9 @@ class Sutro:
         if isinstance(model_list, list):
             if isinstance(name, list):
                 if len(name) != len(model_list):
-                    raise ValueError("Name list must be the same length as the model list.")
+                    raise ValueError(
+                        "Name list must be the same length as the model list."
+                    )
                 name_list = name
             elif isinstance(name, str):
                 raise ValueError("Name must be a list if using a list of models.")
@@ -538,21 +518,29 @@ class Sutro:
                 name_list = [None] * len(model_list)
         else:
             if isinstance(name, list):
-                raise ValueError("Name must be a string or None if using a single model.")
+                raise ValueError(
+                    "Name must be a string or None if using a single model."
+                )
             name_list = [name]
 
         if isinstance(model_list, list):
             if isinstance(description, list):
                 if len(description) != len(model_list):
-                    raise ValueError("Descriptions list must be the same length as the model list.")
+                    raise ValueError(
+                        "Descriptions list must be the same length as the model list."
+                    )
                 description_list = description
             elif isinstance(description, str):
-                raise ValueError("Description must be a list if using a list of models.")
+                raise ValueError(
+                    "Description must be a list if using a list of models."
+                )
             elif description is None:
                 description_list = [None] * len(model_list)
         else:
             if isinstance(name, list):
-                raise ValueError("Description must be a string or None if using a single model.")
+                raise ValueError(
+                    "Description must be a string or None if using a single model."
+                )
             description_list = [description]
 
         # Convert BaseModel to dict if needed
@@ -569,7 +557,7 @@ class Sutro:
                 )
         else:
             json_schema = None
-        
+
         results = []
         for i in range(len(model_list)):
             res = self._run_one_batch_inference(
@@ -600,15 +588,45 @@ class Sutro:
     def embed(
         self,
         data: Union[List, pd.DataFrame, pl.DataFrame, str],
-        model: ModelOptions = "qwen-3-embedding-0.6b",
+        model: EmbeddingModelOptions = "qwen-3-embedding-0.6b",
+        job_priority: int = 0,
         name: Union[str, List[str]] = None,
         description: Union[str, List[str]] = None,
+        output_column: str = "inference_result",
         column: Union[str, List[str]] = None,
-        job_priority: int = 0,
         truncate_rows: bool = True,
     ):
-        return internal.embed._embed_simple(
-            self, data, model, name, description, column, job_priority, truncate_rows
+        """
+        A simple template style function to generate embeddings for the provided data, with Sutro.
+
+        This method allows you to generate vector embeddings for the provided data using Sutro.
+        It supports various options for inputting data, such as lists, DatFrames (Polars or Pandas), file paths and datasets.
+        The method will wait for the embedding job to complete before returning the results.
+
+        Args:
+            data (Union[List, pd.DataFrame, pl.DataFrame, str]): The data to generate embeddings for.
+            model (ModelOptions, optional): The embedding model to use. Defaults to "qwen-3-embedding-0.6b"; a model we chose as its small & fast, yet performs well on a variety of tasks.
+            job_priority (int, optional): The priority of the job. Defaults to 0.
+            name (Union[str, List[str]], optional): A job name for experiment/metadata tracking purposes. Defaults to None.
+            description (Union[str, List[str]], optional): A job description for experiment/metadata tracking purposes. Defaults to None.
+            output_column (str, optional): The column name to store the embedding results in if the input is a DataFrame. Defaults to "inference_result".
+            column (Union[str, List[str]], optional): The column name to use for embedding generation. Required if data is a DataFrame, file path, or dataset. If a list is supplied, it will concatenate the columns of the list into a single column, accepting separator strings.
+            truncate_rows (bool, optional): If True, any rows that have a token count exceeding the context window length of the selected model will be truncated to the max length that will fit within the context window. Defaults to True.
+
+        Returns:
+            The completed embedding results for the provided data.
+
+        """
+        return templates.embed._embed_simple(
+            self,
+            data,
+            model,
+            name,
+            description,
+            column,
+            output_column,
+            job_priority,
+            truncate_rows,
         )
 
     def attach(self, job_id):
@@ -1035,10 +1053,11 @@ class Sutro:
                 first_row = json.loads(
                     results_df.head(1)[output_column][0]
                 )  # checks if the first row can be json decoded
-                results_df = results_df.map_columns(output_column, lambda s: s.str.json_decode())
+                results_df = results_df.map_columns(
+                    output_column, lambda s: s.str.json_decode()
+                )
                 results_df = results_df.with_columns(
-                    pl.col(output_column)
-                    .alias("output_column_json_decoded")
+                    pl.col(output_column).alias("output_column_json_decoded")
                 )
                 json_decoded_fields = first_row.keys()
                 for field in json_decoded_fields:
@@ -1047,19 +1066,20 @@ class Sutro:
                         .struct.field(field)
                         .alias(field)
                     )
-                if sorted(list(set(json_decoded_fields))) == ['content', 'reasoning_content']: # if it's a reasoning model, we need to unpack the content field
-                    content_keys = results_df.head(1)['content'][0].keys()
+                if sorted(list(set(json_decoded_fields))) == [
+                    "content",
+                    "reasoning_content",
+                ]:  # if it's a reasoning model, we need to unpack the content field
+                    content_keys = results_df.head(1)["content"][0].keys()
                     for key in content_keys:
                         results_df = results_df.with_columns(
-                            pl.col("content")
-                            .struct.field(key)
-                            .alias(key)
+                            pl.col("content").struct.field(key).alias(key)
                         )
                     results_df = results_df.drop("content")
                 results_df = results_df.drop(
                     [output_column, "output_column_json_decoded"]
                 )
-            except Exception as e:
+            except Exception:
                 # if the first row cannot be json decoded, do nothing
                 pass
 

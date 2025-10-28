@@ -1,12 +1,41 @@
 import os
-from typing import TYPE_CHECKING, Any, Dict, Union, List, Optional
+from typing import Union, List, Literal
+
 import pandas as pd
 import polars as pl
-import requests
-from pydantic import BaseModel, Field
 
-if TYPE_CHECKING:
-    from ..sdk import Sutro, handle_data_helper, ModelOptions
+EmbeddingModelOptions = Literal[
+    "qwen-3-embedding-0.6b",
+    "qwen-3-embedding-6b",
+    "qwen-3-embedding-8b",
+]
+
+# Models available for inference.  Keep in sync with the backend configuration
+# so users get helpful autocompletion when selecting a model.
+ModelOptions = Literal[
+    "llama-3.2-3b",
+    "llama-3.1-8b",
+    "llama-3.3-70b",
+    "llama-3.3-70b",
+    "qwen-3-4b",
+    "qwen-3-14b",
+    "qwen-3-32b",
+    "qwen-3-30b-a3b",
+    "qwen-3-235b-a22b",
+    "qwen-3-4b-thinking",
+    "qwen-3-14b-thinking",
+    "qwen-3-32b-thinking",
+    "qwen-3-235b-a22b-thinking",
+    "qwen-3-30b-a3b-thinking",
+    "gemma-3-4b-it",
+    "gemma-3-12b-it",
+    "gemma-3-27b-it",
+    "gpt-oss-20b",
+    "gpt-oss-120b",
+    "qwen-3-embedding-0.6b",
+    "qwen-3-embedding-6b",
+    "qwen-3-embedding-8b",
+]
 
 
 def do_dataframe_column_concatenation(
@@ -87,76 +116,3 @@ def handle_data_helper(
         )
 
     return input_data
-
-
-def make_auth_headers(client: "Sutro") -> Dict[str, str]:
-    """Helper to create auth headers."""
-    return {"Authorization": f"Bearer {client.api_key}"}
-
-
-def do_request(client: "Sutro", method: str, endpoint: str, **kwargs: Any) -> dict:
-    """
-    Helper to make authenticated requests.
-
-    Args:
-        client: Sutro client instance
-        method: HTTP method (GET, POST, PUT, DELETE, PATCH)
-        endpoint: API endpoint (e.g., "/datasets" or "datasets")
-        **kwargs: Additional arguments passed to requests (json, data, files, etc.)
-
-    Returns:
-        JSON response from the API
-    """
-    headers = make_auth_headers(client)
-    # Merge with any headers passed in kwargs
-    if "headers" in kwargs:
-        headers.update(kwargs.pop("headers"))
-
-    url = f"{client.base_url}/{endpoint.lstrip('/')}"
-
-    # Explicit method dispatch
-    method = method.upper()
-    if method == "GET":
-        response = requests.get(url, headers=headers, **kwargs)
-    elif method == "POST":
-        response = requests.post(url, headers=headers, **kwargs)
-    elif method == "PUT":
-        response = requests.put(url, headers=headers, **kwargs)
-    elif method == "DELETE":
-        response = requests.delete(url, headers=headers, **kwargs)
-    elif method == "PATCH":
-        response = requests.patch(url, headers=headers, **kwargs)
-    else:
-        raise ValueError(f"Unsupported HTTP method: {method}")
-
-    response.raise_for_status()
-    return response.json()
-
-
-class BatchInferenceRequest(BaseModel):
-    """Request model for batch inference."""
-
-    model: ModelOptions
-    data: Union[List, pd.DataFrame, pl.DataFrame, str]
-    column: Union[str, List[str]]
-    job_priority: int
-    json_schema: Optional[Dict[str, Any]] = None
-    sampling_params: Dict[str, Any] = Field(default_factory=dict)
-    system_prompt: Optional[str] = None
-    cost_estimate: bool = False
-    random_seed_per_input: bool = False
-    truncate_rows: bool = False
-    name: Optional[str] = None
-    description: Optional[str] = None
-
-
-def _do_batch_inference_request(
-    client: "Sutro",
-    request: BatchInferenceRequest,
-):
-    return do_request(
-        client,
-        "POST",
-        "/batch-inference",
-        json=request.model_dump(mode="json", exclude_none=True),
-    )
