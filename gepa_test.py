@@ -6,12 +6,17 @@ Example: Optimize patent analysis prompt from GPT-4o to Qwen-3-4B
 
 import json
 import re
-from typing import Any, TypedDict
+import time
+from datetime import timedelta
+from typing import Any, TypedDict, Tuple
 
 import litellm
 import polars as pl
 
 import gepa
+from datasets import load_dataset
+from dotenv import load_dotenv
+from gepa import GEPAResult, TimeoutStopCondition
 from gepa.core.adapter import EvaluationBatch, GEPAAdapter
 
 
@@ -41,10 +46,30 @@ def create_golden_dataset_from_parquet(
     system_prompt: str,
     output_file: str = "golden_examples.jsonl",
     seed: int = 42,
+    use_existing: bool = True,
 ) -> list[DataInst]:
     """
     Create golden dataset by sampling from parquet and running through strong model.
+
+    Args:
+        use_existing: If True and output_file exists, load from file instead of regenerating
     """
+    import os
+
+    # Check if we can use existing file
+    if use_existing and os.path.exists(output_file):
+        print(f"✓ Found existing golden dataset: {output_file}")
+        print(f"  Loading {output_file} (use_existing=True)")
+
+        examples = []
+        with open(output_file, 'r') as f:
+            for line in f:
+                examples.append(json.loads(line))
+
+        print(f"✓ Loaded {len(examples)} examples from file\n")
+        return examples
+
+    # Generate new dataset
     print("Creating golden dataset:")
     print(f"  Loading from: {parquet_path}")
     print(f"  Sampling {n_samples} rows")
@@ -54,6 +79,7 @@ def create_golden_dataset_from_parquet(
     # Load and sample
     df = pl.read_parquet(parquet_path)
     sampled_df = df.sample(n=min(n_samples, len(df)), seed=seed)
+    print(len(df))
 
     # Prepare messages
     messages_batch = []
@@ -72,12 +98,14 @@ def create_golden_dataset_from_parquet(
     responses = litellm.batch_completion(
         model=golden_model,
         messages=[msgs for _, msgs in messages_batch],
-        max_workers=10,
+        max_workers=15,
     )
 
     print('Got all responses back')
 
     for (input_text, _), response in zip(messages_batch, responses):
+        if isinstance(response, litellm.APIError):
+            print("ERROR", response)
         golden_output = response.choices[0].message.content
         examples.append({
             "input": input_text,
@@ -95,77 +123,103 @@ def create_golden_dataset_from_parquet(
     return examples
 
 
-# ============================================================================
-# Step 2: LLM Judge (3-point scale)
-# ============================================================================
-
 class LLMJudge:
     def __init__(self, judge_model: str, golden_model_name: str ):
         self.judge_model = judge_model
         self.golden_model_name = golden_model_name
 
-    def score(self, input_text: str, golden: str, generated: str) -> tuple[float, str]:
-        """Score generated output. Returns (score, reasoning)."""
-        prompt = f"""You are evaluating a generated response against a reference response.
+    def score_batch(
+        self, system_prompt: str, inputs: list[str], goldens: list[str], generateds: list[str]
+    ) -> list[Tuple[float, str]]:
+        """Score multiple outputs in parallel using batch_completion."""
+        # Create prompts for all items
+        messages_list = [
+            [
+                {
+                    "role": "user",
+                    "content": f"""You are evaluating a generated response against a reference response. The generated response was generated after being given the task instructions and the given inmput.
+                    
+**Task Instructions:** {system_prompt}
 
-**Input:** {input_text[:500]}...
+**Input:** {inp}
 
-**Reference (from {self.golden_model_name}):** {golden}
+**Reference:** {gold}
 
-**Generated:** {generated}
+**Generated:** {gen}
 
 **Scoring:**
-CORRECT (1.0): Contains all key information, no significant errors
-PARTIAL (0.5): Some correct info but missing key elements or minor errors
+CORRECT (1.0): Contains all key information, no significant errors, closely matches reference response
+PARTIAL (0.5): Some correct info but missing key elements or minor errors, generally doesn't match reference response
 WRONG (0.0): Major errors, missing most information, or unusable
 
 Format: SCORE: [0.0, 0.5, or 1.0]
 REASON: [one sentence]
 
-SCORE:"""
+SCORE:""",
+                }
+            ]
+            for inp, gold, gen in zip(inputs, goldens, generateds)
+        ]
 
-        try:
-            import litellm
-            response = litellm.completion(
-                model=self.judge_model,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0,
-            ).choices[0].message.content
-        except Exception as e:
-            return 0.0, f"Judge failed: {e}"
+        # Batch call to LiteLLM
+        responses = litellm.batch_completion(
+            model=self.judge_model,
+            messages=messages_list,
+            temperature=0,
+            max_workers=10
+        )
 
-        # Parse score
-        score_match = re.search(r'SCORE:\s*(0\.0|0\.5|1\.0)', response)
-        score = float(score_match.group(1)) if score_match else 0.0
+        # Parse all responses
+        results = []
+        for response in responses:
+            if isinstance(response, litellm.APIError):
+                print("ERROR", response)
+            content = response.choices[0].message.content
 
-        # Parse reasoning
-        reason_match = re.search(r'REASON:\s*(.+?)(?:\n|$)', response, re.IGNORECASE)
-        reasoning = reason_match.group(1).strip() if reason_match else response[:200]
+            # Parse score
+            score_match = re.search(r"SCORE:\s*(0\.0|0\.5|1\.0)", content)
+            score = float(score_match.group(1)) if score_match else 0.0
 
-        return score, reasoning
+            # Parse reasoning
+            reason_match = re.search(
+                r"REASON:\s*(.+?)(?:\n|$)", content, re.IGNORECASE
+            )
+            reasoning = (
+                reason_match.group(1).strip() if reason_match else content[:200]
+            )
 
-    def generate_feedback(self, input_text: str, golden: str, generated: str, score: float) -> str:
+            results.append((score, reasoning))
+
+        return results
+
+    def generate_feedback(self, system_prompt: str, input_text: str, golden: str, generated: str, score: float) -> str:
         """Generate actionable feedback for GEPA."""
         if score == 1.0:
             return "CORRECT: Response matches reference quality."
 
+        # TODO(cooper) it would be good to make this prompt dynamically aware of the
+        #  size/strength of the target model
         prompt = f"""The generated response scored {score} on a discrete scale [0.0,0.5,1.0].
+        
+**Task Instructions:** {system_prompt}
 
-**Input:** {input_text[:500]}...
+**Input:** {input_text}
+
 **Reference:** {golden}
+
 **Generated:** {generated}
 
-Provide 2-3 specific points on what needs to improve.
+Provide 2-3 specific points that would help drive improvement on future iterations. These points will be taken as feedback to improve the instructions given to future assistants.
 
-Issues:"""
+Keep in mind that this feedback may be incorporated into a prompt for a weaker assistant than yourself, thus it can get overwhelmed by mega prompts with excruciating detail.
 
-
+Issues and improvements:"""
 
         feedback = (
             litellm.completion(
                 model=self.judge_model,
                 messages=[{"role": "user", "content": prompt}],
-                temperature=0,
+                temperature=0.3,
             )
             .choices[0]
             .message.content
@@ -174,10 +228,6 @@ Issues:"""
         prefix = "PARTIAL: " if score == 0.5 else "WRONG: "
         return prefix + feedback
 
-
-# ============================================================================
-# Step 3: GEPA Adapter
-# ============================================================================
 
 class SutroPromptAdapter(GEPAAdapter[DataInst, dict, RolloutOutput]):
     def __init__(
@@ -209,42 +259,41 @@ class SutroPromptAdapter(GEPAAdapter[DataInst, dict, RolloutOutput]):
             messages_batch.append(msgs)
 
         # Execute target model
-        try:
-            import litellm
-            responses = [
-                resp.choices[0].message.content
-                for resp in litellm.batch_completion(
-                    model=self.target_model,
-                    messages=messages_batch,
-                    max_workers=self.max_workers,
-                )
-            ]
-        except Exception:
-            return EvaluationBatch(
-                outputs=[{"generated": "", "score": 0.0}] * len(batch),
-                scores=[0.0] * len(batch),
-                trajectories=None,
+        responses = [
+            # TODO need to pass in default or user provider sampling params here
+            resp.choices[0].message.content
+            for resp in litellm.batch_completion(
+                model=self.target_model,
+                messages=messages_batch,
+                max_workers=self.max_workers,
             )
+        ]
 
         # Score each response
         outputs = []
         scores = []
         traces = [] if capture_traces else None
 
-        for data, response in zip(batch, responses):
-            score, reasoning = self.judge.score(data["input"], data["golden_output"], response)
+        inputs = [data["input"] for data in batch]
+        goldens = [data["golden_output"] for data in batch]
+        generateds = responses
+        batch_results = self.judge.score_batch(system_prompt, inputs, goldens, generateds)
 
+        # Process results
+        for data, response, (score, reasoning) in zip(batch, responses, batch_results):
             outputs.append({"generated": response, "score": score})
             scores.append(score)
 
             if capture_traces:
-                traces.append({
-                    "input": data["input"],
-                    "golden": data["golden_output"],
-                    "generated": response,
-                    "score": score,
-                    "reasoning": reasoning,
-                })
+                traces.append(
+                    {
+                        "input": data["input"],
+                        "golden": data["golden_output"],
+                        "generated": response,
+                        "score": score,
+                        "reasoning": reasoning,
+                    }
+                )
 
         return EvaluationBatch(outputs=outputs, scores=scores, trajectories=traces)
 
@@ -256,21 +305,26 @@ class SutroPromptAdapter(GEPAAdapter[DataInst, dict, RolloutOutput]):
     ) -> dict[str, list[dict[str, Any]]]:
         items = []
 
+        system_prompt = next(iter(candidate.values()))
+
         for trace in eval_batch.trajectories:
             feedback = self.judge.generate_feedback(
+                system_prompt,
                 trace["input"],
                 trace["golden"],
                 trace["generated"],
                 trace["score"],
             )
 
-            items.append({
-                "Input": trace["input"][:500] + "...",  # Truncate for readability
+            it = {
+                "Input": trace["input"],
                 "Expected Output": trace["golden"],
                 "Generated Output": trace["generated"],
                 "Score": f"{trace['score']}/1.0",
                 "Feedback": feedback,
-            })
+            }
+
+            items.append(it)
 
         return {components_to_update[0]: items}
 
@@ -286,10 +340,21 @@ def optimize_prompt(
     golden_model_name: str ,
     judge_model: str ,
     reflection_lm: str ,
-    max_metric_calls: int = 150,
+    max_metric_calls: int = None,
+    max_runtime_minutes: int | None = None,
     output_dir: str = "./gepa_output",
 ) -> dict:
-    """Run GEPA optimization."""
+    """
+    Run GEPA optimization.
+
+    Speed optimization options:
+    - max_metric_calls: Lower = faster (50 = ~30min, 150 = ~2hrs, 300 = ~4hrs)
+    - max_runtime_minutes: Hard timeout if available (requires gepa.utils.TimeoutStopper)
+    - Reduce n_samples in golden dataset creation
+    - Use smaller val set (automatically 20% of examples)
+
+    The main speed knob is max_metric_calls (budget). Lower budget = faster but less optimization.
+    """
 
     # Split train/val
     split_idx = int(len(examples) * 0.8)
@@ -303,7 +368,10 @@ def optimize_prompt(
     print(f"Golden model: {golden_model_name}")
     print(f"Train: {len(trainset)}, Val: {len(valset)}")
     print(f"Budget: {max_metric_calls} evaluations")
-    print()
+    if max_runtime_minutes:
+        print(f"Max runtime: {max_runtime_minutes} minutes")
+    print(f"\n💡 Tip: Create '{output_dir}/gepa.stop' file to gracefully stop early")
+    print(f"💡 Tip: If interrupted, will resume from {output_dir}\n")
 
     # Create adapter
     adapter = SutroPromptAdapter(
@@ -312,39 +380,59 @@ def optimize_prompt(
         judge_model=judge_model,
     )
 
+    # Setup stop conditions (if timeout specified)
+    stop_callbacks = None
+    if max_runtime_minutes:
+        timeout_stopper = TimeoutStopCondition(max_runtime_minutes * 60)  # noqa: F821
+        stop_callbacks = [timeout_stopper]
+        print(f"⏱️  Timeout enabled: will stop after {max_runtime_minutes} minutes")
+
+
     # Run GEPA
-    opt_result = gepa.optimize(
+    # Note: If interrupted, GEPA will resume from run_dir automatically
+    start_time = time.time()
+
+    opt_result: GEPAResult = gepa.optimize(
         seed_candidate={"system_prompt": seed_prompt},
         trainset=trainset,
         valset=valset,
         adapter=adapter,
         reflection_lm=reflection_lm,
         max_metric_calls=max_metric_calls,
-        reflection_minibatch_size=3,
+        reflection_minibatch_size=5,
         candidate_selection_strategy="pareto",
         skip_perfect_score=True,
         perfect_score=1.0,
         run_dir=output_dir,
         display_progress_bar=True,
+        stop_callbacks=stop_callbacks,
+        use_wandb=True,
+        wandb_init_kwargs={
+            "entity": "coopslarhette-n-a",
+            "project":"my-awesome-project",
+        }
     )
+
+    # Calculate duration
+    end_time = time.time()
+    duration_minutes = (end_time - start_time) / 60
+
+    # Display in readable format
+    print(f"Optimization completed in: {timedelta(minutes=duration_minutes)}")
+    print(f"Optimization completed in: {duration_minutes:.2f} minutes")
 
     print("\n" + "="*80)
     print("OPTIMIZATION COMPLETE")
     print("="*80)
-    print(f"Baseline:   {opt_result.program_scores[0]:.2%}")
-    print(f"Optimized:  {opt_result.best_score:.2%}")
-    print(f"Improvement: +{(opt_result.best_score - opt_result.program_scores[0]):.2%}")
     print()
     print("OPTIMIZED PROMPT:")
     print("-"*80)
     print(opt_result.best_candidate["system_prompt"])
+    print(opt_result.val_aggregate_scores[opt_result.best_idx])
     print("-"*80)
 
     return {
         "optimized_prompt": opt_result.best_candidate["system_prompt"],
-        "best_score": opt_result.best_score,
-        "baseline_score": opt_result.program_scores[0],
-        "improvement": opt_result.best_score - opt_result.program_scores[0],
     }
 
 
@@ -353,43 +441,117 @@ def optimize_prompt(
 # ============================================================================
 
 if __name__ == "__main__":
+
     # Your patent analysis prompt
-    SYSTEM_PROMPT = """You are a patent analyst. You will be given a patent filing.
 
-Generate the following:
-1.  **Title**: The main title of the patent.
-2.  **Short Summary**: A brief summary of the patent.
-3.  **Keywords**: A list of relevant keywords.
-4.  **Key Quirks**: Identify a few notable or unusual aspects (`SimplifiedQuirk`). For each, provide an ID, description, and an optional humor rating (0.0-1.0).
-5.  **Core Interpretations**: Provide some core interpretations (`SimplifiedInterpretation`) of the patent's claims or purpose. Include an ID, the interpretation text, and a confidence score (0.0-1.0).
-6.  **Suggested Application Areas**: List potential application areas.
-7.  **Overall Novelty Score**: Rate the patent's novelty on a scale of 1 to 10.
+    SYSTEM_PROMPT = """Classify the following patent abstract as one of the following classes:
+CLASSIFICATION CLASSES:
+0: Human Necessities - food, agriculture, medicine, healthcare, personal care
+1: Performing Operations; Transporting - manufacturing, industrial processes, transportation
+2: Chemistry; Metallurgy - chemical processes, materials science, metallurgy, polymers
+3: Textiles; Paper - textile production, paper making, fiber processing
+4: Fixed Constructions - buildings, roads, bridges, construction, civil engineering
+5: Mechanical Engineering; Lightning; Heating; Weapons; Blasting - mechanical systems, engines
+6: Physics - measurement instruments, optics, nuclear physics, scientific analysis
+7: Electricity - electrical circuits, power generation, electronics, telecommunications  
+8: General tagging of new or cross-sectional technology - AI, nanotechnology, interdisciplinary
 
-Please output each criteria on a separate line."""
+Abstract:
+"""
+#     SYSTEM_PROMPT = """
+#
+# You are a precise document classifier.
+#
+# # Objective
+# Your task is to classify the provided text into one of the labels below.
+#
+# # Guidelines
+# - Classify the text based on its primary topic. The classification should reflect what the document is predominantly about. If the majority of the document discusses topics unrelated to the available labels, but only a small portion mentions content that would fit one of the defined labels, classify the document as OTHER.
+#
+# # Labels
+# CYBERSECURITY — Security content proper: vulnerabilities/CVEs, exploits, malware/reverse engineering, threat intel, pentest/red team, blue team/IR/SOC, forensics, AppSec/secure coding, cloud security/IAM, ICS/OT/IoT security, policy/compliance when written for practitioners.
+#
+# COMPUTER_SYSTEMS — Linux/Unix/Windows admin, filesystems, processes, services, systemd, Docker/K8s, virtualization, Terraform/Ansible used operationally.
+#
+# SOFTWARE_DEVELOPMENT — SDLC/CI/CD, code review, dependency management, secure coding practices when general, Git usage impacting code integrity.
+#
+# CRYPTOGRAPHY — Practical cryptography: hashing, encryption, signatures, TLS, key management (not pure math proofs).
+#
+# OS_COMMAND — Terminal/PowerShell/CMD usage, shell pipelines, admin scripts, package managers, config snippets focused on operating systems behavior.
+#
+# NETWORK_PROTOCOL — TCP/IP, DNS, HTTP/TLS, SSH, SMTP, BGP/OSPF—protocol mechanics, packet structure, handshake/state machines.
+#
+# PROGRAMMING — General coding without a security angle (Python/Go/C/C++/JS snippets, API usage, tutorials not tied to security).
+#
+# OTHER — Everything else.
+#
+# Classify the input text provided by the user into one of the specified labels and explain your reasoning.
+#
+# """
 
     # Configuration
-    PARQUET_PATH = "processed_patents_filtered/batch_001.parquet"
-    INPUT_COLUMN = "description_localized"
-    N_SAMPLES = 50
-    FRONTIER_MODEL = "gemini/gemini-2.5-flash"
-    TARGET_MODEL = "openrouter/qwen/qwen3-30b-a3b-thinking-2507"
-    max_metric_calls = 50
+    PARQUET_PATH = "/Users/cooperlarhette/Downloads/jobs_2025-10-07_user-a0d28ecc-10c9-489f-9b2d-51658e3f12aa_job-47518aa2-45a9-4865-a398-a6af39e06e6c_inputs_inputs_part_0.snappy.parquet"
+    INPUT_COLUMN = "SKYSIGHT_PROMPTS"
+    FRONTIER_MODEL = "openrouter/openai/gpt-5"
+    GOLDEN_MODEL = "openrouter/openai/gpt-5"
+    TARGET_MODEL = "openrouter/openai/gpt-oss-20b"
+
+    # Speed modes - choose one:
+    # The BUDGET (max_metric_calls) is the main speed control
+    MODE = "fast"  # Change to "balanced" or "thorough"
+
+    if MODE == "fast":
+        # ~30-45 minutes total
+        N_SAMPLES = 450        # Fewer examples = faster golden creation
+        MAX_METRIC_CALLS = 2000           # Fewer evaluations = faster optimization
+        MAX_RUNTIME_MINUTES = 30      # 1 hour safety limit
+    elif MODE == "balanced":
+        # ~1-2 hours total (recommended)
+        N_SAMPLES = 100
+        MAX_METRIC_CALLS = 150
+        MAX_RUNTIME_MINUTES = 120
+    else:  # thorough
+        # ~3-4 hours total
+        N_SAMPLES = 200
+        MAX_METRIC_CALLS = 300
+        MAX_RUNTIME_MINUTES = 240
 
     print("="*80)
     print("GEPA OPTIMIZATION: PATENT ANALYSIS")
     print("="*80)
     print(f"Goal: Optimize prompt from {FRONTIER_MODEL} → {TARGET_MODEL}")
+    print(f"Mode: {MODE.upper()}")
+    print(f"  - Samples: {N_SAMPLES}")
+    print(f"  - Budget: {MAX_METRIC_CALLS} evaluations")
+    print(f"  - Max runtime: {MAX_RUNTIME_MINUTES} minutes")
     print()
 
-    # Step 1: Create golden dataset
-    examples = create_golden_dataset_from_parquet(
-        parquet_path=PARQUET_PATH,
-        input_column=INPUT_COLUMN,
-        n_samples=N_SAMPLES,
-        golden_model="gemini/gemini-2.5-pro",
-        system_prompt=SYSTEM_PROMPT,
-        output_file="patent_golden_examples.jsonl",
-    )
+    # Step 1: Create golden dataset (or load if exists)
+    # examples = create_golden_dataset_from_parquet(
+    #     parquet_path=PARQUET_PATH,
+    #     input_column=INPUT_COLUMN,
+    #     n_samples=N_SAMPLES,
+    #     golden_model=GOLDEN_MODEL,
+    #     system_prompt=SYSTEM_PROMPT,
+    #     output_file="patent_golden_examples.jsonl",
+    #     use_existing=True,  # Set to False to force regeneration
+    # )
+
+
+    load_dotenv()
+    dataset = load_dataset("ccdv/patent-classification", "abstract")
+
+    # Convert to pandas dataframe (using the train split)
+    df = dataset["train"].to_pandas()
+
+    # Get first 400 examples in the required format
+    examples: list[DataInst] = [
+        {
+            "input": row["text"],
+            "golden_output": row["label"],
+        }
+        for _, row in df.head(400).iterrows()
+    ]
 
     # Step 2: Optimize prompt
     result = optimize_prompt(
@@ -399,8 +561,9 @@ Please output each criteria on a separate line."""
         golden_model_name=FRONTIER_MODEL,
         judge_model=FRONTIER_MODEL,
         reflection_lm=FRONTIER_MODEL,
-        max_metric_calls=max_metric_calls,
+        # max_metric_calls=MAX_METRIC_CALLS,
         output_dir="./patent_optimization",
+        max_runtime_minutes=MAX_RUNTIME_MINUTES
     )
 
     # Step 3: Save results
