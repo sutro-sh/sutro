@@ -1,11 +1,8 @@
-from typing import Union, List, TYPE_CHECKING
+from typing import Union, List
 import polars as pl
 import pandas as pd
 from ..common import EmbeddingModelOptions
 from ..interfaces import BaseSutroClient
-
-if TYPE_CHECKING:
-    pass
 
 
 class EmbedTemplates(BaseSutroClient):
