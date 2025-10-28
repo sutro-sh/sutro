@@ -16,7 +16,7 @@ import pyarrow.parquet as pq
 import shutil
 import importlib.metadata
 from sutro import templates
-from sutro.common import ModelOptions
+from sutro.common import ModelOptions, handle_data_helper
 from sutro.templates.embed import EmbeddingModelOptions
 
 JOB_NAME_CHAR_LIMIT = 45
@@ -211,7 +211,7 @@ class Sutro:
                 f"Job description cannot exceed {JOB_DESCRIPTION_CHAR_LIMIT} characters."
             )
 
-        input_data = self.handle_data_helper(data, column)
+        input_data = handle_data_helper(data, column)
         endpoint = f"{self.base_url}/batch-inference"
         headers = {
             "Authorization": f"Key {self.api_key}",
@@ -238,7 +238,7 @@ class Sutro:
         # Terminal size {self._terminal_width} is too small to display spinner with the given settings.
         # https://github.com/pavdmyt/yaspin/blob/9c7430b499ab4611888ece39783a870e4a05fa45/yaspin/core.py#L568-L571
         job_id = None
-        t = f"Creating {'[cost estimate] ' if cost_estimate else ''}priority {job_priority} job"
+        t = f"Creating {'[cost estimate] ' if cost_estimate else ''}priority {job_priority} job\nUsing {model}"
         spinner_text = to_colored_text(t)
         try:
             with yaspin(SPINNER, text=spinner_text, color=YASPIN_COLOR) as spinner:
