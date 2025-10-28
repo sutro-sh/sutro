@@ -1,4 +1,3 @@
-import requests
 import pandas as pd
 import polars as pl
 from typing import Any, Dict, List, Optional, Union
@@ -9,16 +8,9 @@ from sutro.common import ModelOptions
 
 class BaseSutroClient:
     """
-    Base class declaring attributes and method interfaces for mixins.
-
-    This provides type hints for all methods that will be available
-    on the Sutro client through mixins.
+    Base class declaring attributes and method interfaces for template function mixins
+    to use.
     """
-
-    # Shared state
-    _api_key: str
-    _base_url: str
-    _http: requests.Session
 
     # Core inference method interface
     def infer(
