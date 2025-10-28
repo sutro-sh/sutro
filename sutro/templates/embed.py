@@ -5,7 +5,7 @@ from ..common import EmbeddingModelOptions
 from ..interfaces import BaseSutroClient
 
 
-class EmbedTemplates(BaseSutroClient):
+class EmbeddingTemplates(BaseSutroClient):
     def embed(
         self,
         data: Union[List, pd.DataFrame, pl.DataFrame, str],
@@ -18,7 +18,7 @@ class EmbedTemplates(BaseSutroClient):
         truncate_rows: bool = True,
     ):
         """
-        A simple template style function to generate embeddings for the provided data, with Sutro.
+        A simple template style function to generate embeddings for the provided data, with Sutro. The intention is that the implemented code should be very easy to extend further, while showing a basic structure for large scale embedding generation with Sutro.
 
         This method allows you to generate vector embeddings for the provided data using Sutro.
         It supports various options for inputting data, such as lists, DataFrames (Polars or Pandas), file paths and datasets.
