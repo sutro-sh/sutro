@@ -1,8 +1,9 @@
 import os
-from typing import Union, List, Literal
+from typing import Union, List, Literal, Dict, Any, Type
 
 import pandas as pd
 import polars as pl
+from pydantic import BaseModel
 
 EmbeddingModelOptions = Literal[
     "qwen-3-embedding-0.6b",
@@ -116,3 +117,17 @@ def handle_data_helper(
         )
 
     return input_data
+
+
+def normalize_output_schema(
+    output_schema: Union[Dict[str, Any], Type[BaseModel], None],
+):
+    """Consolidate any varied types for output_schema to dict format."""
+    if hasattr(output_schema, "model_json_schema"):
+        return output_schema.model_json_schema()
+    elif isinstance(output_schema, dict):
+        return output_schema
+    else:
+        raise ValueError(
+            "Invalid output schema type. Must be a dictionary or a pydantic Model."
+        )

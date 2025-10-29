@@ -3,7 +3,7 @@ import requests
 import pandas as pd
 import polars as pl
 import json
-from typing import Union, List, Optional, Literal, Dict, Any
+from typing import Union, List, Optional, Literal, Dict, Any, Type
 import os
 import sys
 from yaspin import yaspin
@@ -15,7 +15,7 @@ from pydantic import BaseModel
 import pyarrow.parquet as pq
 import shutil
 import importlib.metadata
-from sutro.common import ModelOptions, handle_data_helper
+from sutro.common import ModelOptions, handle_data_helper, normalize_output_schema
 from sutro.templates.embed import EmbeddingTemplates
 
 JOB_NAME_CHAR_LIMIT = 45
@@ -455,13 +455,13 @@ class Sutro(EmbeddingTemplates):
     def infer(
         self,
         data: Union[List, pd.DataFrame, pl.DataFrame, str],
-        model: Union[ModelOptions, List[ModelOptions]] = "gemma-3-12b-it",
-        name: Union[str, List[str]] = None,
-        description: Union[str, List[str]] = None,
+        model: ModelOptions = "gemma-3-12b-it",
+        name: Optional[str] = None,
+        description: Optional[str] = None,
         column: Union[str, List[str]] = None,
         output_column: str = "inference_result",
         job_priority: int = 0,
-        output_schema: Union[Dict[str, Any], BaseModel] = None,
+        output_schema: Union[Dict[str, Any], Type[BaseModel]] = None,
         sampling_params: dict = None,
         system_prompt: str = None,
         dry_run: bool = False,
@@ -477,14 +477,14 @@ class Sutro(EmbeddingTemplates):
 
         Args:
             data (Union[List, pd.DataFrame, pl.DataFrame, str]): The data to run inference on.
-            model (Union[ModelOptions, List[ModelOptions]], optional): The model(s) to use for inference. Defaults to "llama-3.1-8b". You can pass a single model or a list of models. In the case of a list, the inference will be run in parallel for each model and stay_attached will be set to False.
-            name (Union[str, List[str]], optional): A job name for experiment/metadata tracking purposes. If using a list of models, you must pass a list of names with length equal to the number of models, or None. Defaults to None.
-            description (Union[str, List[str]], optional): A job description for experiment/metadata tracking purposes. If using a list of models, you must pass a list of descriptions with length equal to the number of models, or None. Defaults to None.
+            model (ModelOptions, optional): The model to use for inference. Defaults to "gemma-3-12b-it".
+            name (str, optional): A job name for experiment/metadata tracking purposes. Defaults to None.
+            description (str, optional): A job description for experiment/metadata tracking purposes. Defaults to None.
             column (Union[str, List[str]], optional): The column name to use for inference. Required if data is a DataFrame, file path, or dataset. If a list is supplied, it will concatenate the columns of the list into a single column, accepting separator strings.
             output_column (str, optional): The column name to store the inference results in if the input is a DataFrame. Defaults to "inference_result".
             job_priority (int, optional): The priority of the job. Defaults to 0.
             output_schema (Union[Dict[str, Any], BaseModel], optional): A structured schema for the output.
-                Can be either a dictionary representing a JSON schema or a pydantic BaseModel. Defaults to None.
+                Can be either a dictionary representing a JSON schema or a class that inherits from Pydantic BaseModel. Defaults to None.
             sampling_params: (dict, optional): The sampling parameters to use at generation time, ie temperature, top_p etc.
             system_prompt (str, optional): A system prompt to add to all inputs. This allows you to define the behavior of the model. Defaults to None.
             dry_run (bool, optional): If True, the method will return cost estimates instead of running inference. Defaults to False.
@@ -496,73 +496,114 @@ class Sutro(EmbeddingTemplates):
             str: The ID of the inference job.
 
         """
-        if isinstance(model, list) == False:
-            model_list = [model]
-            stay_attached = (
-                stay_attached if stay_attached is not None else job_priority == 0
+        # Default stay_attached to True for prototyping jobs (priority 0)
+        if stay_attached is None:
+            stay_attached = job_priority == 0
+
+
+        json_schema = None
+        if output_schema:
+            # Convert BaseModel to dict if needed
+            json_schema = normalize_output_schema(output_schema)
+
+        return self._run_one_batch_inference(
+            data,
+            model,
+            column,
+            output_column,
+            job_priority,
+            json_schema,
+            sampling_params,
+            system_prompt,
+            dry_run,
+            stay_attached,
+            random_seed_per_input,
+            truncate_rows,
+            name,
+            description,
+        )
+
+    def infer_multi_model(
+        self,
+        data: Union[List, pd.DataFrame, pl.DataFrame, str],
+        models: List[ModelOptions],
+        names: List[str] = None,
+        descriptions: List[str] = None,
+        column: Union[str, List[str]] = None,
+        output_column: str = "inference_result",
+        job_priority: int = 0,
+        output_schema: Union[Dict[str, Any], Type[BaseModel]] = None,
+        sampling_params: dict = None,
+        system_prompt: str = None,
+        dry_run: bool = False,
+        random_seed_per_input: bool = False,
+        truncate_rows: bool = True,
+    ):
+        """
+        Run inference on the provided data, across multiple models. This method is often useful to sampling outputs from multiple models across the same dataset and compare the job_ids.
+
+        For input data, it supports various data types such as lists, DataFrames (Polars or Pandas), file paths and datasets.
+
+        Args:
+            data (Union[List, pd.DataFrame, pl.DataFrame, str]): The data to run inference on.
+            models (Union[ModelOptions, List[ModelOptions]], optional): The models to use for inference. Fans out each model to its own seperate job, over the same dataset.
+            names (Union[str, List[str]], optional): A job name for experiment/metadata tracking purposes. If using a list of models, you must pass a list of names with length equal to the number of models, or None. Defaults to None.
+            descriptions (Union[str, List[str]], optional): A job description for experiment/metadata tracking purposes. If using a list of models, you must pass a list of descriptions with length equal to the number of models, or None. Defaults to None.
+            column (Union[str, List[str]], optional): The column name to use for inference. Required if data is a DataFrame, file path, or dataset. If a list is supplied, it will concatenate the columns of the list into a single column, accepting separator strings.
+            output_column (str, optional): The column name to store the inference job_ids in if the input is a DataFrame. Defaults to "inference_result".
+            job_priority (int, optional): The priority of the job. Defaults to 0.
+            output_schema (Union[Dict[str, Any], BaseModel], optional): A structured schema for the output.
+                Can be either a dictionary representing a JSON schema or a class that inherits from Pydantic BaseModel. Defaults to None.
+            sampling_params: (dict, optional): The sampling parameters to use at generation time, ie temperature, top_p etc.
+            system_prompt (str, optional): A system prompt to add to all inputs. This allows you to define the behavior of the model. Defaults to None.
+            dry_run (bool, optional): If True, the method will return cost estimates instead of running inference. Defaults to False.
+            stay_attached (bool, optional): If True, the method will stay attached to the job until it is complete. Defaults to True for prototyping jobs, False otherwise.
+            random_seed_per_input (bool, optional): If True, the method will use a different random seed for each input. Defaults to False.
+            truncate_rows (bool, optional): If True, any rows that have a token count exceeding the context window length of the selected model will be truncated to the max length that will fit within the context window. Defaults to True.
+
+        Returns:
+            str: The ID of the inference job.
+
+        """
+        if isinstance(names, list):
+            if len(names) != len(models):
+                raise ValueError(
+                    "names parameter must be the same length as the models parameter."
+                )
+        elif names is None:
+            names = [None] * len(models)
+        else:
+            raise ValueError(
+                "names parameter must be  a list or None if using a list of models"
             )
-        else:
-            model_list = model
-            stay_attached = False
 
-        if isinstance(model_list, list):
-            if isinstance(name, list):
-                if len(name) != len(model_list):
-                    raise ValueError(
-                        "Name list must be the same length as the model list."
-                    )
-                name_list = name
-            elif isinstance(name, str):
-                raise ValueError("Name must be a list if using a list of models.")
-            elif name is None:
-                name_list = [None] * len(model_list)
+        if isinstance(descriptions, list):
+            if len(descriptions) != len(models):
+                raise ValueError(
+                    "descriptions parameter must be the same length as the models"
+                    " parameter."
+                )
+        elif descriptions is None:
+            descriptions = [None] * len(models)
         else:
-            if isinstance(name, list):
-                raise ValueError(
-                    "Name must be a string or None if using a single model."
-                )
-            name_list = [name]
+            raise ValueError(
+                "descriptions parameter must be a list or None if using a list of "
+                "models"
+            )
 
-        if isinstance(model_list, list):
-            if isinstance(description, list):
-                if len(description) != len(model_list):
-                    raise ValueError(
-                        "Descriptions list must be the same length as the model list."
-                    )
-                description_list = description
-            elif isinstance(description, str):
-                raise ValueError(
-                    "Description must be a list if using a list of models."
-                )
-            elif description is None:
-                description_list = [None] * len(model_list)
-        else:
-            if isinstance(name, list):
-                raise ValueError(
-                    "Description must be a string or None if using a single model."
-                )
-            description_list = [description]
+        json_schema = None
+        if output_schema:
+            # Convert BaseModel to dict if needed
+            json_schema = normalize_output_schema(output_schema)
 
-        # Convert BaseModel to dict if needed
-        if output_schema is not None:
-            if hasattr(
-                output_schema, "model_json_schema"
-            ):  # Check for pydantic Model interface
-                json_schema = output_schema.model_json_schema()
-            elif isinstance(output_schema, dict):
-                json_schema = output_schema
-            else:
-                raise ValueError(
-                    "Invalid output schema type. Must be a dictionary or a pydantic Model."
-                )
-        else:
-            json_schema = None
-
-        results = []
-        for i in range(len(model_list)):
-            res = self._run_one_batch_inference(
+        def start_job(
+            model_singleton: ModelOptions,
+            name_singleton: str | None,
+            description_singleton: str | None,
+        ):
+            return self._run_one_batch_inference(
                 data,
-                model_list[i],
+                model_singleton,
                 column,
                 output_column,
                 job_priority,
@@ -570,20 +611,21 @@ class Sutro(EmbeddingTemplates):
                 sampling_params,
                 system_prompt,
                 dry_run,
-                stay_attached,
+                False,
                 random_seed_per_input,
                 truncate_rows,
-                name_list[i],
-                description_list[i],
+                name_singleton,
+                description_singleton,
             )
-            results.append(res)
 
-        if len(results) > 1:
-            return results
-        elif len(results) == 1:
-            return results[0]
+        job_ids = [
+            start_job(model, name, description)
+            for model, name, description in zip(
+                models, names, descriptions, strict=True
+            )
+        ]
 
-        return None
+        return job_ids
 
     def attach(self, job_id):
         """
