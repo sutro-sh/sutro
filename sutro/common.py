@@ -1,8 +1,9 @@
 import os
-from typing import Union, List, Literal, Dict, Any, Type
+from typing import Union, List, Literal, Dict, Any, Type, Optional
 
 import pandas as pd
 import polars as pl
+from colorama import Fore, Style
 from pydantic import BaseModel
 
 EmbeddingModelOptions = Literal[
@@ -131,3 +132,29 @@ def normalize_output_schema(
         raise ValueError(
             "Invalid output schema type. Must be a dictionary or a pydantic Model."
         )
+
+
+def to_colored_text(
+    text: str, state: Optional[Literal["success", "fail", "callout"]] = None
+) -> str:
+    """
+    Apply color to text based on state.
+
+    Args:
+        text (str): The text to color
+        state (Optional[Literal['success', 'fail']]): The state that determines the color.
+            Options: 'success', 'fail', or None (default blue)
+
+    Returns:
+        str: Text with appropriate color applied
+    """
+    match state:
+        case "success":
+            return f"{Fore.GREEN}{text}{Style.RESET_ALL}"
+        case "fail":
+            return f"{Fore.RED}{text}{Style.RESET_ALL}"
+        case "callout":
+            return f"{Fore.MAGENTA}{text}{Style.RESET_ALL}"
+        case _:
+            # Default to blue for normal/processing states
+            return f"{Fore.BLUE}{text}{Style.RESET_ALL}"
