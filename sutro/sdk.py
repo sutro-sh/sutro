@@ -500,7 +500,6 @@ class Sutro(EmbeddingTemplates):
         if stay_attached is None:
             stay_attached = job_priority == 0
 
-
         json_schema = None
         if output_schema:
             # Convert BaseModel to dict if needed
@@ -523,7 +522,7 @@ class Sutro(EmbeddingTemplates):
             description,
         )
 
-    def infer_multi_model(
+    def infer_per_model(
         self,
         data: Union[List, pd.DataFrame, pl.DataFrame, str],
         models: List[ModelOptions],
