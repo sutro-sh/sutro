@@ -3,7 +3,7 @@ import requests
 import pandas as pd
 import polars as pl
 import json
-from typing import Union, List, Optional, Dict, Any, Type
+from typing import Union, List, Optional, Literal, Dict, Any, Type
 import os
 import sys
 from yaspin import yaspin
@@ -543,7 +543,7 @@ class Sutro(EmbeddingTemplates):
             description,
         )
 
-    def infer_multi_model(
+    def infer_per_model(
         self,
         data: Union[List, pd.DataFrame, pl.DataFrame, str],
         models: List[ModelOptions],
