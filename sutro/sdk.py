@@ -17,6 +17,7 @@ import shutil
 import importlib.metadata
 from sutro.common import ModelOptions, handle_data_helper
 from sutro.templates.embed import EmbeddingTemplates
+from sutro.templates.evals import EvalTemplates
 
 JOB_NAME_CHAR_LIMIT = 45
 JOB_DESCRIPTION_CHAR_LIMIT = 512
@@ -99,7 +100,7 @@ def make_clickable_link(url, text=None):
     return f"\033]8;;{url}\033\\{text}\033]8;;\033\\"
 
 
-class Sutro(EmbeddingTemplates):
+class Sutro(EmbeddingTemplates, EvalTemplates):
     def __init__(self, api_key: str = None, base_url: str = "https://api.sutro.sh/"):
         self.api_key = api_key or self.check_for_api_key()
         self.base_url = base_url
