@@ -1,3 +1,5 @@
+from enum import Enum
+
 import pandas as pd
 import polars as pl
 from typing import Any, Dict, List, Optional, Union
@@ -61,3 +63,28 @@ class BaseSutroClient:
         obtain_results: bool = True,
         is_cost_estimate: bool = False,
     ) -> list | None: ...
+
+
+class JobStatus(str, Enum):
+    """Job statuses that will be returned by the API & SDK"""
+
+    UNKNOWN = "UNKNOWN"
+    QUEUED = "QUEUED"  # Job is waiting to start
+    STARTING = "STARTING"  # Job is in the process of starting up
+    RUNNING = "RUNNING"  # Job is actively running
+    SUCCEEDED = "SUCCEEDED"  # Job completed successfully
+    CANCELLING = "CANCELLING"  # Job is in the process of being canceled
+    CANCELLED = "CANCELLED"  # Job was canceled by the user
+    FAILED = "FAILED"  # Job failed
+
+    @classmethod
+    def terminal_statuses(cls) -> list["JobStatus"]:
+        return [
+            cls.SUCCEEDED,
+            cls.FAILED,
+            cls.CANCELLING,
+            cls.CANCELLED,
+        ]
+
+    def is_terminal(self) -> bool:
+        return self in self.terminal_statuses()
