@@ -20,6 +20,7 @@ from sutro.common import (
     fancy_tqdm,
 )
 from sutro.interfaces import JobStatus
+from sutro.templates.classification import ClassificationTemplates
 from sutro.templates.embed import EmbeddingTemplates
 from sutro.validation import check_version, check_for_api_key
 
@@ -52,7 +53,7 @@ def make_clickable_link(url, text=None):
     return f"\033]8;;{url}\033\\{text}\033]8;;\033\\"
 
 
-class Sutro(EmbeddingTemplates):
+class Sutro(EmbeddingTemplates, ClassificationTemplates):
     def __init__(self, api_key: str = None, base_url: str = "https://api.sutro.sh/"):
         self.api_key = api_key or check_for_api_key()
         self.base_url = base_url
