@@ -1,15 +1,13 @@
-from enum import Enum
 import requests
 import pandas as pd
 import polars as pl
 import json
-from typing import Union, List, Optional, Literal, Dict, Any, Type
+from typing import Union, List, Optional, Dict, Any, Type
 import os
 import sys
 from yaspin import yaspin
 from yaspin.spinners import Spinners
 from colorama import init
-from tqdm import tqdm
 import time
 from pydantic import BaseModel
 import pyarrow.parquet as pq
@@ -19,38 +17,14 @@ from sutro.common import (
     handle_data_helper,
     normalize_output_schema,
     to_colored_text,
+    fancy_tqdm,
 )
+from sutro.interfaces import JobStatus
 from sutro.templates.embed import EmbeddingTemplates
 from sutro.validation import check_version, check_for_api_key
 
 JOB_NAME_CHAR_LIMIT = 45
 JOB_DESCRIPTION_CHAR_LIMIT = 512
-
-
-class JobStatus(str, Enum):
-    """Job statuses that will be returned by the API & SDK"""
-
-    UNKNOWN = "UNKNOWN"
-    QUEUED = "QUEUED"  # Job is waiting to start
-    STARTING = "STARTING"  # Job is in the process of starting up
-    RUNNING = "RUNNING"  # Job is actively running
-    SUCCEEDED = "SUCCEEDED"  # Job completed successfully
-    CANCELLING = "CANCELLING"  # Job is in the process of being canceled
-    CANCELLED = "CANCELLED"  # Job was canceled by the user
-    FAILED = "FAILED"  # Job failed
-
-    @classmethod
-    def terminal_statuses(cls) -> list["JobStatus"]:
-        return [
-            cls.SUCCEEDED,
-            cls.FAILED,
-            cls.CANCELLING,
-            cls.CANCELLED,
-        ]
-
-    def is_terminal(self) -> bool:
-        return self in self.terminal_statuses()
-
 
 # Initialize colorama (required for Windows)
 init()
@@ -76,65 +50,6 @@ def make_clickable_link(url, text=None):
     if text is None:
         text = url
     return f"\033]8;;{url}\033\\{text}\033]8;;\033\\"
-
-
-def fancy_tqdm(
-    total: int,
-    desc: str = "Progress",
-    color: str = "blue",
-    style=1,
-    postfix: str = None,
-):
-    """
-    Creates a customized tqdm progress bar with different styling options.
-
-    Args:
-        total (int): Total iterations
-        desc (str): Description for the progress bar
-        color (str): Color of the progress bar (green, blue, red, yellow, magenta)
-        style (int): Style preset (1-4)
-        postfix (str): Postfix for the progress bar
-    """
-
-    # Style presets
-    style_presets = {
-        1: {
-            "bar_format": "{l_bar}{bar:30}| {n_fmt}/{total_fmt} | {percentage:3.0f}% {postfix}",
-            "ascii": "░▒█",
-        },
-        2: {
-            "bar_format": "╢{l_bar}{bar:30}╟ {percentage:3.0f}%",
-            "ascii": "▁▂▃▄▅▆▇█",
-        },
-        3: {
-            "bar_format": "{desc}: |{bar}| {percentage:3.0f}% [{elapsed}<{remaining}]",
-            "ascii": "◯◔◑◕●",
-        },
-        4: {
-            "bar_format": "⏳ {desc} {percentage:3.0f}% |{bar}| {n_fmt}/{total_fmt}",
-            "ascii": "⬜⬛",
-        },
-        5: {
-            "bar_format": "⏳ {desc} {percentage:3.0f}% |{bar}| {n_fmt}/{total_fmt}",
-            "ascii": "▏▎▍▌▋▊▉█",
-        },
-    }
-
-    # Get style configuration
-    style_config = style_presets.get(style, style_presets[1])
-
-    return tqdm(
-        total=total,
-        desc=desc,
-        colour=color,
-        bar_format=style_config["bar_format"],
-        ascii=style_config["ascii"],
-        ncols=80,
-        dynamic_ncols=True,
-        smoothing=0.3,
-        leave=True,
-        postfix=postfix,
-    )
 
 
 class Sutro(EmbeddingTemplates):

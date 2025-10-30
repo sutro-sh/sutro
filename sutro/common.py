@@ -5,6 +5,7 @@ import pandas as pd
 import polars as pl
 from colorama import Fore, Style
 from pydantic import BaseModel
+from tqdm import tqdm
 
 EmbeddingModelOptions = Literal[
     "qwen-3-embedding-0.6b",
@@ -158,3 +159,62 @@ def to_colored_text(
         case _:
             # Default to blue for normal/processing states
             return f"{Fore.BLUE}{text}{Style.RESET_ALL}"
+
+
+def fancy_tqdm(
+    total: int,
+    desc: str = "Progress",
+    color: str = "blue",
+    style=1,
+    postfix: str = None,
+):
+    """
+    Creates a customized tqdm progress bar with different styling options.
+
+    Args:
+        total (int): Total iterations
+        desc (str): Description for the progress bar
+        color (str): Color of the progress bar (green, blue, red, yellow, magenta)
+        style (int): Style preset (1-4)
+        postfix (str): Postfix for the progress bar
+    """
+
+    # Style presets
+    style_presets = {
+        1: {
+            "bar_format": "{l_bar}{bar:30}| {n_fmt}/{total_fmt} | {percentage:3.0f}% {postfix}",
+            "ascii": "░▒█",
+        },
+        2: {
+            "bar_format": "╢{l_bar}{bar:30}╟ {percentage:3.0f}%",
+            "ascii": "▁▂▃▄▅▆▇█",
+        },
+        3: {
+            "bar_format": "{desc}: |{bar}| {percentage:3.0f}% [{elapsed}<{remaining}]",
+            "ascii": "◯◔◑◕●",
+        },
+        4: {
+            "bar_format": "⏳ {desc} {percentage:3.0f}% |{bar}| {n_fmt}/{total_fmt}",
+            "ascii": "⬜⬛",
+        },
+        5: {
+            "bar_format": "⏳ {desc} {percentage:3.0f}% |{bar}| {n_fmt}/{total_fmt}",
+            "ascii": "▏▎▍▌▋▊▉█",
+        },
+    }
+
+    # Get style configuration
+    style_config = style_presets.get(style, style_presets[1])
+
+    return tqdm(
+        total=total,
+        desc=desc,
+        colour=color,
+        bar_format=style_config["bar_format"],
+        ascii=style_config["ascii"],
+        ncols=80,
+        dynamic_ncols=True,
+        smoothing=0.3,
+        leave=True,
+        postfix=postfix,
+    )
