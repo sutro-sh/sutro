@@ -791,7 +791,7 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates):
         output_column: str = "inference_result",
         disable_cache: bool = False,
         unpack_json: bool = True,
-    ):
+    ) -> pl.DataFrame | pd.DataFrame:
         """
         Get the results of a job by its ID.
 
@@ -1240,7 +1240,7 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates):
         timeout: Optional[int] = 7200,
         obtain_results: bool = True,
         is_cost_estimate: bool = False,
-    ) -> list | None:
+    ) -> pl.DataFrame | None:
         """
         Waits for job completion to occur and then returns the results upon
         a successful completion.
@@ -1256,7 +1256,7 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates):
         """
         POLL_INTERVAL = 5
 
-        results = None
+        results: pl.DataFrame | None = None
         start_time = time.time()
         with yaspin(
             SPINNER, text=to_colored_text("Awaiting job completion"), color=YASPIN_COLOR

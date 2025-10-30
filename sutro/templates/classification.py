@@ -33,7 +33,7 @@ class ClassificationTemplates(BaseSutroClient):
                 - A list of class names, ie ["Positive", "Negative", "Neutral"]
                 - A dict mapping class labels to descriptions, ie {"Positive": "Expresses satisfaction...", ...}
                 Providing descriptions can improve classification accuracy, especially for ambiguous or domain-specific categories.
-            model (ModelOptions, optional): The LLM to use. Defaults to "gemma-3-12b-it"; a model chosen for its balance of performance and efficiency, that also retains competency across a broad numver of different domains.
+            model (ModelOptions, optional): The LLM to use. Defaults to "gemma-3-12b-it"; a model chosen for its balance of performance and efficiency, that also retains competency across a broad number of different domains.
             job_priority (int, optional): The priority of the job. Defaults to 0.
             name (Union[str, List[str]], optional): A job name for experiment/metadata tracking purposes. Defaults to None.
             description (Union[str, List[str]], optional): A job description for experiment/metadata tracking purposes. Defaults to None.
