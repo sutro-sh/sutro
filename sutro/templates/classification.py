@@ -11,7 +11,7 @@ class ClassificationTemplates(BaseSutroClient):
     def classify(
         self,
         data: Union[List, pd.DataFrame, pl.DataFrame, str],
-        categories: Union[dict[str, str], list[str]],
+        classes: Union[dict[str, str], list[str]],
         model: ModelOptions = "gemma-3-12b-it",
         job_priority: int = 0,
         name: Union[str, List[str]] = None,
@@ -29,9 +29,9 @@ class ClassificationTemplates(BaseSutroClient):
 
         Args:
             data (Union[List, pd.DataFrame, pl.DataFrame, str]): The data to classify. Each row should contain some text to classifiy that fits into one of the passed in labels.
-            categories (Union[dict[str, str], list[str]]): The classification categories. Can be either:
-                - A list of category names, ie ["Positive", "Negative", "Neutral"]
-                - A dict mapping category labels to descriptions, ie {"Positive": "Expresses satisfaction...", ...}
+            classes (Union[dict[str, str], list[str]]): The classification classes. Can be either:
+                - A list of class names, ie ["Positive", "Negative", "Neutral"]
+                - A dict mapping class labels to descriptions, ie {"Positive": "Expresses satisfaction...", ...}
                 Providing descriptions can improve classification accuracy, especially for ambiguous or domain-specific categories.
             model (ModelOptions, optional): The LLM to use. Defaults to "gemma-3-12b-it"; a model chosen for its balance of performance and efficiency, that also retains competency across a broad numver of different domains.
             job_priority (int, optional): The priority of the job. Defaults to 0.
@@ -45,26 +45,26 @@ class ClassificationTemplates(BaseSutroClient):
             The completed classification results for the provided data, including both the scratchpad reasoning and final classification for each input.
 
         """
-        if isinstance(categories, dict):
-            formatted_categories = "\n".join(
-                [f"- {name}: {desc}" for name, desc in categories.items()]
+        if isinstance(classes, dict):
+            formatted_classes = "\n".join(
+                [f"- {name}: {desc}" for name, desc in classes.items()]
             )
         else:
-            formatted_categories = "\n".join([f"- {cat}" for cat in categories])
+            formatted_classes = "\n".join([f"- {c}" for c in classes])
 
         system_prompt = f"""You are an expert classifier. Your task is to accurately categorize the input into one of the provided classes.
 
-    ## Categories
+    ## Classes
 
-    {formatted_categories}
+    {formatted_classes}
 
     ## Instructions
 
     1. **Analyze the input carefully**: Read and understand the full context - identify key elements, themes, and characteristics
 
-    2. **Consider each class**: For each possible category, evaluate how similar the input is to its typical characteristics
+    2. **Consider each class**: For each possible class, evaluate how similar the input is to its typical characteristics
 
-    3. **Provide your reasoning in the scratchpad**: Think through which category fits best and why
+    3. **Provide your reasoning in the scratchpad**: Think through which class fits best and why
 
     4. **Provide output**: Give your final classification
 
@@ -72,7 +72,7 @@ class ClassificationTemplates(BaseSutroClient):
 
     ## Guidelines
 
-    - Select exactly ONE category, even if multiple seem applicable (choose the best match)
+    - Select exactly ONE class, even if multiple seem applicable (choose the best match)
     - If the input is ambiguous, choose the closest fit and explain your reasoning
     - Base your decision on the actual content, not assumptions or implications
     - Similar inputs should receive the same classification
