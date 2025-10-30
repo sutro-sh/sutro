@@ -2,7 +2,7 @@ from enum import Enum
 
 import pandas as pd
 import polars as pl
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union, Type
 from pydantic import BaseModel
 
 from sutro.common import ModelOptions
@@ -24,7 +24,7 @@ class BaseSutroClient:
         column: Union[str, List[str]] = None,
         output_column: str = "inference_result",
         job_priority: int = 0,
-        output_schema: Union[Dict[str, Any], BaseModel] = None,
+        output_schema: Union[Dict[str, Any], Type[BaseModel]] = None,
         sampling_params: dict = None,
         system_prompt: str = None,
         dry_run: bool = False,
