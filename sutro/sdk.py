@@ -20,6 +20,7 @@ from sutro.common import (
     fancy_tqdm,
 )
 from sutro.interfaces import JobStatus
+from sutro.templates.classification import ClassificationTemplates
 from sutro.templates.embed import EmbeddingTemplates
 from sutro.validation import check_version, check_for_api_key
 
@@ -52,7 +53,7 @@ def make_clickable_link(url, text=None):
     return f"\033]8;;{url}\033\\{text}\033]8;;\033\\"
 
 
-class Sutro(EmbeddingTemplates):
+class Sutro(EmbeddingTemplates, ClassificationTemplates):
     def __init__(self, api_key: str = None, base_url: str = "https://api.sutro.sh/"):
         self.api_key = api_key or check_for_api_key()
         self.base_url = base_url
@@ -790,7 +791,7 @@ class Sutro(EmbeddingTemplates):
         output_column: str = "inference_result",
         disable_cache: bool = False,
         unpack_json: bool = True,
-    ):
+    ) -> pl.DataFrame | pd.DataFrame:
         """
         Get the results of a job by its ID.
 
@@ -1239,7 +1240,7 @@ class Sutro(EmbeddingTemplates):
         timeout: Optional[int] = 7200,
         obtain_results: bool = True,
         is_cost_estimate: bool = False,
-    ) -> list | None:
+    ) -> pl.DataFrame | None:
         """
         Waits for job completion to occur and then returns the results upon
         a successful completion.
@@ -1255,7 +1256,7 @@ class Sutro(EmbeddingTemplates):
         """
         POLL_INTERVAL = 5
 
-        results = None
+        results: pl.DataFrame | None = None
         start_time = time.time()
         with yaspin(
             SPINNER, text=to_colored_text("Awaiting job completion"), color=YASPIN_COLOR
