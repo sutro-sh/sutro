@@ -61,6 +61,7 @@ class BaseSutroClient:
         job_id: str,
         timeout: Optional[int] = 7200,
         obtain_results: bool = True,
+        output_column: str = "inference_result",
         is_cost_estimate: bool = False,
     ) -> pl.DataFrame | None: ...
 
