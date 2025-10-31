@@ -9,7 +9,8 @@ import pandas as pd
 from colorama import Fore, Style
 
 from sutro.sdk import Sutro
-from sutro.sdk import to_colored_text
+from sutro.common import to_colored_text
+
 
 class TestSutro(unittest.TestCase):
     def setUp(self):        

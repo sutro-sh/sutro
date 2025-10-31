@@ -1,6 +1,8 @@
+from enum import Enum
+
 import pandas as pd
 import polars as pl
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union, Type
 from pydantic import BaseModel
 
 from sutro.common import ModelOptions
@@ -22,7 +24,7 @@ class BaseSutroClient:
         column: Union[str, List[str]] = None,
         output_column: str = "inference_result",
         job_priority: int = 0,
-        output_schema: Union[Dict[str, Any], BaseModel] = None,
+        output_schema: Union[Dict[str, Any], Type[BaseModel]] = None,
         sampling_params: dict = None,
         system_prompt: str = None,
         dry_run: bool = False,
@@ -60,4 +62,29 @@ class BaseSutroClient:
         timeout: Optional[int] = 7200,
         obtain_results: bool = True,
         is_cost_estimate: bool = False,
-    ) -> list | None: ...
+    ) -> pl.DataFrame | None: ...
+
+
+class JobStatus(str, Enum):
+    """Job statuses that will be returned by the API & SDK"""
+
+    UNKNOWN = "UNKNOWN"
+    QUEUED = "QUEUED"  # Job is waiting to start
+    STARTING = "STARTING"  # Job is in the process of starting up
+    RUNNING = "RUNNING"  # Job is actively running
+    SUCCEEDED = "SUCCEEDED"  # Job completed successfully
+    CANCELLING = "CANCELLING"  # Job is in the process of being canceled
+    CANCELLED = "CANCELLED"  # Job was canceled by the user
+    FAILED = "FAILED"  # Job failed
+
+    @classmethod
+    def terminal_statuses(cls) -> list["JobStatus"]:
+        return [
+            cls.SUCCEEDED,
+            cls.FAILED,
+            cls.CANCELLING,
+            cls.CANCELLED,
+        ]
+
+    def is_terminal(self) -> bool:
+        return self in self.terminal_statuses()
