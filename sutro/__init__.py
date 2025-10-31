@@ -7,20 +7,8 @@ _instance = Sutro()
 from types import MethodType
 
 for attr in dir(_instance):
-    if attr.startswith("__"):
-        continue
-    value = getattr(_instance, attr)
-    if isinstance(value, type):
-        continue
-    # If it's a bound method (has __func__), rebind; otherwise export the value directly
-    if callable(value) and hasattr(value, "__func__"):
-        globals()[attr] = MethodType(value.__func__, _instance)
-    else:
-        globals()[attr] = value
+    if callable(getattr(_instance, attr)) and not attr.startswith("__"):
+        globals()[attr] = MethodType(getattr(_instance, attr).__func__, _instance)
 
 # Clean up namespace
 del MethodType, attr
-try:
-    del value
-except NameError:
-    pass
