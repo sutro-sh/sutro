@@ -150,9 +150,23 @@ Return a ranking of the options as an ordered list of the labels from best to wo
             stay_attached=False,
         )
 
-        res = self.await_job_completion(job_id)
+        res = self.await_job_completion(job_id, output_column=ranking_column_name)
+
+        # This doesn't work when do as a single step for some reason
+        res = (
+            res.with_columns(
+                pl.col(ranking_column_name).str.json_decode().alias("_decoded")
+            )
+            .with_columns(
+                pl.col("_decoded")
+                .struct.field(ranking_column_name)
+                .alias(ranking_column_name)
+            )
+            .drop("_decoded")
+        )
+
         if run_elo:
-            elo_ratings = self.rank.elo(data=res, column=ranking_column_name)
+            elo_ratings = self.elo(data=res, column=ranking_column_name)
             print(elo_ratings[["elo", "wins", "losses", "matches"]].to_markdown())
 
         if isinstance(data, pl.DataFrame):

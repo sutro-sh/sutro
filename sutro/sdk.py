@@ -21,7 +21,8 @@ from sutro.common import (
 )
 from sutro.interfaces import JobStatus
 from sutro.templates.classification import ClassificationTemplates
-from sutro.templates.embed import EmbeddingTemplates,EvalTemplates
+from sutro.templates.embed import EmbeddingTemplates
+from sutro.templates.evals import EvalTemplates
 from sutro.validation import check_version, check_for_api_key
 
 JOB_NAME_CHAR_LIMIT = 45
@@ -1239,6 +1240,7 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
         job_id: str,
         timeout: Optional[int] = 7200,
         obtain_results: bool = True,
+        output_column: str = "inference_result",
         is_cost_estimate: bool = False,
     ) -> pl.DataFrame | None:
         """
@@ -1293,7 +1295,9 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
                                 "Job completed! Retrieving results...", "success"
                             )
                         )
-                        results = self.get_job_results(job_id)
+                        results = self.get_job_results(
+                            job_id, output_column=output_column
+                        )
                     break
                 if status == JobStatus.FAILED:
                     spinner.write(to_colored_text("Job has failed", "fail"))
