@@ -57,30 +57,30 @@ class ClassificationTemplates(BaseSutroClient):
 
         system_prompt = f"""You are an expert classifier. Your task is to accurately categorize the input into one of the provided classes.
 
-        ## Classes
-    
-        {formatted_classes}
-    
-        ## Instructions
-    
-        1. **Analyze the input carefully**: Read and understand the full context - identify key elements, themes, and characteristics
-    
-        2. **Consider each class**: For each possible class, evaluate how similar the input is to its typical characteristics
-    
-        3. **Provide your reasoning in the scratchpad**: Think through which class fits best and why
-    
-        4. **Provide output**: Give your final classification
-    
-        If needed, use the scratchpad field to work through steps 1-3, then provide your final answer in the classification field.
-    
-        ## Guidelines
-    
-        - Select exactly ONE class, even if multiple seem applicable (choose the best match)
-        - If the input is ambiguous, choose the closest fit and explain your reasoning
-        - Base your decision on the actual content, not assumptions or implications
-        - Similar inputs should receive the same classification
-    
-        Respond using the structured format with scratchpad and classification fields."""
+## Classes
+
+{formatted_classes}
+
+## Instructions
+
+1. **Analyze the input carefully**: Read and understand the full context - identify key elements, themes, and characteristics
+
+2. **Consider each class**: For each possible class, evaluate how similar the input is to its typical characteristics
+
+3. **Provide your reasoning in the scratchpad**: Think through which class fits best and why
+
+4. **Provide output**: Give your final classification
+
+If needed, use the scratchpad field to work through steps 1-3, then provide your final answer in the classification field.
+
+## Guidelines
+
+- Select exactly ONE class, even if multiple seem applicable (choose the best match)
+- If the input is ambiguous, choose the closest fit and explain your reasoning
+- Base your decision on the actual content, not assumptions or implications
+- Similar inputs should receive the same classification
+
+Respond using the structured format with scratchpad and classification fields."""
 
         class ClassificationOutput(BaseModel):
             # Since we're using structured outputs, we want to give the model some
