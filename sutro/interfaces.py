@@ -62,7 +62,7 @@ class BaseSutroClient:
         timeout: Optional[int] = 7200,
         obtain_results: bool = True,
         is_cost_estimate: bool = False,
-    ) -> list | None: ...
+    ) -> pl.DataFrame | None: ...
 
 
 class JobStatus(str, Enum):
