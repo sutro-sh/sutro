@@ -1,22 +1,14 @@
 from .sdk import Sutro
 
-# Create a singleton instance
+# Create an instance of the class
 _instance = Sutro()
 
-# Export all public methods from the instance
+# Import all methods from the instance into the package namespace
+from types import MethodType
+
 for attr in dir(_instance):
-    if callable(getattr(_instance, attr)) and not attr.startswith("_"):
-        globals()[attr] = getattr(_instance, attr)
-
-# Optionally export the class itself if users need direct access
-# Sutro is already imported and available
-
-# Define __all__ for clean imports
-__all__ = ["Sutro"] + [
-    attr
-    for attr in dir(_instance)
-    if callable(getattr(_instance, attr)) and not attr.startswith("_")
-]
+    if callable(getattr(_instance, attr)) and not attr.startswith("__"):
+        globals()[attr] = MethodType(getattr(_instance, attr).__func__, _instance)
 
 # Clean up namespace
-del attr
+del MethodType, attr

@@ -52,7 +52,7 @@ def set_human_readable_dates(datetime_columns, df):
             # Convert UTC string to local time string
             df = df.with_columns(
                 pl.col(col)
-                .str.to_datetime("%Y-%m-%dT%H:%M:%S%.f%Z")
+                .str.to_datetime()
                 .map_elements(
                     lambda dt: dt.replace(tzinfo=timezone.utc)
                     .astimezone()
