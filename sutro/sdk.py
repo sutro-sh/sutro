@@ -22,6 +22,7 @@ from sutro.common import (
 from sutro.interfaces import JobStatus
 from sutro.templates.classification import ClassificationTemplates
 from sutro.templates.embed import EmbeddingTemplates
+from sutro.templates.evals import EvalTemplates
 from sutro.validation import check_version, check_for_api_key
 
 JOB_NAME_CHAR_LIMIT = 45
@@ -53,7 +54,7 @@ def make_clickable_link(url, text=None):
     return f"\033]8;;{url}\033\\{text}\033]8;;\033\\"
 
 
-class Sutro(EmbeddingTemplates, ClassificationTemplates):
+class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
     def __init__(self, api_key: str = None, base_url: str = "https://api.sutro.sh/"):
         self.api_key = api_key or check_for_api_key()
         self.base_url = base_url
@@ -1239,6 +1240,7 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates):
         job_id: str,
         timeout: Optional[int] = 7200,
         obtain_results: bool = True,
+        output_column: str = "inference_result",
         is_cost_estimate: bool = False,
     ) -> pl.DataFrame | None:
         """
@@ -1293,7 +1295,9 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates):
                                 "Job completed! Retrieving results...", "success"
                             )
                         )
-                        results = self.get_job_results(job_id)
+                        results = self.get_job_results(
+                            job_id, output_column=output_column
+                        )
                     break
                 if status == JobStatus.FAILED:
                     spinner.write(to_colored_text("Job has failed", "fail"))
