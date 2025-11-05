@@ -14,19 +14,20 @@ import litellm
 import polars as pl
 
 import gepa
-from datasets import load_dataset
-from dotenv import load_dotenv
 from gepa import GEPAResult, TimeoutStopCondition
 from gepa.core.adapter import EvaluationBatch, GEPAAdapter
+from litellm.responses.main import responses
+from pydantic import BaseModel, Field
 
 
 # ============================================================================
 # Data Types
 # ============================================================================
 
+
 class DataInst(TypedDict):
     input: str
-    golden_output: str
+    golden_output: dict
 
 
 class RolloutOutput(TypedDict):
@@ -37,6 +38,7 @@ class RolloutOutput(TypedDict):
 # ============================================================================
 # Step 1: Create Golden Dataset
 # ============================================================================
+
 
 def create_golden_dataset_from_parquet(
     parquet_path: str,
@@ -62,7 +64,7 @@ def create_golden_dataset_from_parquet(
         print(f"  Loading {output_file} (use_existing=True)")
 
         examples = []
-        with open(output_file, 'r') as f:
+        with open(output_file, "r") as f:
             for line in f:
                 examples.append(json.loads(line))
 
@@ -87,7 +89,7 @@ def create_golden_dataset_from_parquet(
         input_text = str(row[input_column])
         msgs = [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": input_text}
+            {"role": "user", "content": input_text},
         ]
         messages_batch.append((input_text, msgs))
 
@@ -101,21 +103,23 @@ def create_golden_dataset_from_parquet(
         max_workers=15,
     )
 
-    print('Got all responses back')
+    print("Got all responses back")
 
     for (input_text, _), response in zip(messages_batch, responses):
         if isinstance(response, litellm.APIError):
             print("ERROR", response)
         golden_output = response.choices[0].message.content
-        examples.append({
-            "input": input_text,
-            "golden_output": golden_output,
-        })
+        examples.append(
+            {
+                "input": input_text,
+                "golden_output": golden_output,
+            }
+        )
 
     # Save to JSONL
-    with open(output_file, 'w') as f:
+    with open(output_file, "w") as f:
         for ex in examples:
-            f.write(json.dumps(ex) + '\n')
+            f.write(json.dumps(ex) + "\n")
 
     print(f"✓ Created {len(examples)} examples")
     print(f"✓ Saved to {output_file}\n")
@@ -124,75 +128,92 @@ def create_golden_dataset_from_parquet(
 
 
 class LLMJudge:
-    def __init__(self, judge_model: str, golden_model_name: str ):
+    def __init__(self, judge_model: str, golden_model_name: str):
         self.judge_model = judge_model
         self.golden_model_name = golden_model_name
 
     def score_batch(
-        self, system_prompt: str, inputs: list[str], goldens: list[str], generateds: list[str]
+        self,
+        system_prompt: str,
+        inputs: list[str],
+        goldens: list[dict],
+        generateds: list[dict],
     ) -> list[Tuple[float, str]]:
         """Score multiple outputs in parallel using batch_completion."""
         # Create prompts for all items
-        messages_list = [
-            [
-                {
-                    "role": "user",
-                    "content": f"""You are evaluating a generated response against a reference response. The generated response was generated after being given the task instructions and the given inmput.
-                    
-**Task Instructions:** {system_prompt}
+#         messages_list = [
+#             [
+#                 {
+#                     "role": "user",
+#                     "content": f"""You are evaluating a generated response against a reference response. The generated response was generated after being given the task instructions and the given inmput.
+#
+# **Task Instructions:** {system_prompt}
+#
+# **Input:** {inp}
+#
+# **Reference:** {gold}
+#
+# **Generated:** {gen}
+#
+# **Scoring:**
+# CORRECT (1.0): Contains all key information, no significant errors, closely matches reference response
+# PARTIAL (0.5): Some correct info but missing key elements or minor errors, generally doesn't match reference response
+# WRONG (0.0): Major errors, missing most information, or unusable
+#
+# Format: SCORE: [0.0, 0.5, or 1.0]
+# REASON: [one sentence]
+#
+# SCORE:""",
+#                 }
+#             ]
+#             for inp, gold, gen in zip(inputs, goldens, generateds)
+#         ]
+#
+#         # Batch call to LiteLLM
+#         responses = litellm.batch_completion(
+#             model=self.judge_model,
+#             messages=messages_list,
+#             temperature=0,
+#             max_workers=10,
+#         )
+#
+#         # Parse all responses
+#         results = []
+#         for response in responses:
+#             if isinstance(response, litellm.APIError):
+#                 print("ERROR", response)
+#             content = response.choices[0].message.content
+#
+#             # Parse score
+#             score_match = re.search(r"SCORE:\s*(0\.0|0\.5|1\.0)", content)
+#             score = float(score_match.group(1)) if score_match else 0.0
+#
+#             # Parse reasoning
+#             reason_match = re.search(r"REASON:\s*(.+?)(?:\n|$)", content, re.IGNORECASE)
+#             reasoning = reason_match.group(1).strip() if reason_match else content[:200]
+#
+#             results.append((score, reasoning))
 
-**Input:** {inp}
-
-**Reference:** {gold}
-
-**Generated:** {gen}
-
-**Scoring:**
-CORRECT (1.0): Contains all key information, no significant errors, closely matches reference response
-PARTIAL (0.5): Some correct info but missing key elements or minor errors, generally doesn't match reference response
-WRONG (0.0): Major errors, missing most information, or unusable
-
-Format: SCORE: [0.0, 0.5, or 1.0]
-REASON: [one sentence]
-
-SCORE:""",
-                }
-            ]
-            for inp, gold, gen in zip(inputs, goldens, generateds)
-        ]
-
-        # Batch call to LiteLLM
-        responses = litellm.batch_completion(
-            model=self.judge_model,
-            messages=messages_list,
-            temperature=0,
-            max_workers=10
-        )
-
-        # Parse all responses
         results = []
-        for response in responses:
-            if isinstance(response, litellm.APIError):
-                print("ERROR", response)
-            content = response.choices[0].message.content
-
-            # Parse score
-            score_match = re.search(r"SCORE:\s*(0\.0|0\.5|1\.0)", content)
-            score = float(score_match.group(1)) if score_match else 0.0
-
-            # Parse reasoning
-            reason_match = re.search(
-                r"REASON:\s*(.+?)(?:\n|$)", content, re.IGNORECASE
-            )
-            reasoning = (
-                reason_match.group(1).strip() if reason_match else content[:200]
-            )
-
-            results.append((score, reasoning))
+        for pred, gold in zip(generateds, goldens):
+            print('pred', pred, gold)
+            if HasAlcoholFocusSignals(**json.loads(pred)) == gold:
+                results.append((1.0, "The generated output matched the golden output exactly."))
+            else:
+                results.append(
+                    (0.0, f"The generated output for this input did not match the golden output. The golden was {gold}, while the generated was {pred}.")
+                )
 
         return results
 
-    def generate_feedback(self, system_prompt: str, input_text: str, golden: str, generated: str, score: float) -> str:
+    def generate_feedback(
+        self,
+        system_prompt: str,
+        input_text: str,
+        golden: str,
+        generated: str,
+        score: float,
+    ) -> str:
         """Generate actionable feedback for GEPA."""
         if score == 1.0:
             return "CORRECT: Response matches reference quality."
@@ -215,11 +236,14 @@ Keep in mind that this feedback may be incorporated into a prompt for a weaker a
 
 Issues and improvements:"""
 
+        print('PROMPT', prompt)
+
         feedback = (
             litellm.completion(
                 model=self.judge_model,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.3,
+                max_tokens=4096
             )
             .choices[0]
             .message.content
@@ -234,7 +258,7 @@ class SutroPromptAdapter(GEPAAdapter[DataInst, dict, RolloutOutput]):
         self,
         target_model: str,
         golden_model_name: str,
-        judge_model: str ,
+        judge_model: str,
         max_workers: int = 10,
     ):
         self.target_model = target_model
@@ -254,7 +278,7 @@ class SutroPromptAdapter(GEPAAdapter[DataInst, dict, RolloutOutput]):
         for data in batch:
             msgs = [
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": data["input"]}
+                {"role": "user", "content": data["input"]},
             ]
             messages_batch.append(msgs)
 
@@ -266,6 +290,8 @@ class SutroPromptAdapter(GEPAAdapter[DataInst, dict, RolloutOutput]):
                 model=self.target_model,
                 messages=messages_batch,
                 max_workers=self.max_workers,
+                response_format=HasAlcoholFocusSignals,
+                temperature=0
             )
         ]
 
@@ -277,7 +303,9 @@ class SutroPromptAdapter(GEPAAdapter[DataInst, dict, RolloutOutput]):
         inputs = [data["input"] for data in batch]
         goldens = [data["golden_output"] for data in batch]
         generateds = responses
-        batch_results = self.judge.score_batch(system_prompt, inputs, goldens, generateds)
+        batch_results = self.judge.score_batch(
+            system_prompt, inputs, goldens, generateds
+        )
 
         # Process results
         for data, response, (score, reasoning) in zip(batch, responses, batch_results):
@@ -316,6 +344,8 @@ class SutroPromptAdapter(GEPAAdapter[DataInst, dict, RolloutOutput]):
                 trace["score"],
             )
 
+            print("FEEDBACK", feedback)
+
             it = {
                 "Input": trace["input"],
                 "Expected Output": trace["golden"],
@@ -333,13 +363,14 @@ class SutroPromptAdapter(GEPAAdapter[DataInst, dict, RolloutOutput]):
 # Step 4: Optimize
 # ============================================================================
 
+
 def optimize_prompt(
     examples: list[DataInst],
     seed_prompt: str,
     target_model: str,
-    golden_model_name: str ,
-    judge_model: str ,
-    reflection_lm: str ,
+    golden_model_name: str,
+    judge_model: str,
+    reflection_lm: str,
     max_metric_calls: int = None,
     max_runtime_minutes: int | None = None,
     output_dir: str = "./gepa_output",
@@ -361,9 +392,9 @@ def optimize_prompt(
     trainset = examples[:split_idx]
     valset = examples[split_idx:]
 
-    print("="*80)
+    print("=" * 80)
     print("OPTIMIZING PROMPT")
-    print("="*80)
+    print("=" * 80)
     print(f"Target model: {target_model}")
     print(f"Golden model: {golden_model_name}")
     print(f"Train: {len(trainset)}, Val: {len(valset)}")
@@ -387,7 +418,6 @@ def optimize_prompt(
         stop_callbacks = [timeout_stopper]
         print(f"⏱️  Timeout enabled: will stop after {max_runtime_minutes} minutes")
 
-
     # Run GEPA
     # Note: If interrupted, GEPA will resume from run_dir automatically
     start_time = time.time()
@@ -406,11 +436,11 @@ def optimize_prompt(
         run_dir=output_dir,
         display_progress_bar=True,
         stop_callbacks=stop_callbacks,
-        use_wandb=True,
+        use_wandb=False,
         wandb_init_kwargs={
             "entity": "coopslarhette-n-a",
-            "project":"my-awesome-project",
-        }
+            "project": "my-awesome-project",
+        },
     )
 
     # Calculate duration
@@ -421,15 +451,15 @@ def optimize_prompt(
     print(f"Optimization completed in: {timedelta(minutes=duration_minutes)}")
     print(f"Optimization completed in: {duration_minutes:.2f} minutes")
 
-    print("\n" + "="*80)
+    print("\n" + "=" * 80)
     print("OPTIMIZATION COMPLETE")
-    print("="*80)
+    print("=" * 80)
     print()
     print("OPTIMIZED PROMPT:")
-    print("-"*80)
+    print("-" * 80)
     print(opt_result.best_candidate["system_prompt"])
     print(opt_result.val_aggregate_scores[opt_result.best_idx])
-    print("-"*80)
+    print("-" * 80)
 
     return {
         "optimized_prompt": opt_result.best_candidate["system_prompt"],
@@ -441,60 +471,57 @@ def optimize_prompt(
 # ============================================================================
 
 if __name__ == "__main__":
-
     # Your patent analysis prompt
 
-    SYSTEM_PROMPT = """Classify the following patent abstract as one of the following classes:
-CLASSIFICATION CLASSES:
-0: Human Necessities - food, agriculture, medicine, healthcare, personal care
-1: Performing Operations; Transporting - manufacturing, industrial processes, transportation
-2: Chemistry; Metallurgy - chemical processes, materials science, metallurgy, polymers
-3: Textiles; Paper - textile production, paper making, fiber processing
-4: Fixed Constructions - buildings, roads, bridges, construction, civil engineering
-5: Mechanical Engineering; Lightning; Heating; Weapons; Blasting - mechanical systems, engines
-6: Physics - measurement instruments, optics, nuclear physics, scientific analysis
-7: Electricity - electrical circuits, power generation, electronics, telecommunications  
-8: General tagging of new or cross-sectional technology - AI, nanotechnology, interdisciplinary
+    SYSTEM_PROMPT = """You are evaluating whether a restaurant is primarily a bar or alcohol-focused establishment.
 
-Abstract:
-"""
-#     SYSTEM_PROMPT = """
-#
-# You are a precise document classifier.
-#
-# # Objective
-# Your task is to classify the provided text into one of the labels below.
-#
-# # Guidelines
-# - Classify the text based on its primary topic. The classification should reflect what the document is predominantly about. If the majority of the document discusses topics unrelated to the available labels, but only a small portion mentions content that would fit one of the defined labels, classify the document as OTHER.
-#
-# # Labels
-# CYBERSECURITY — Security content proper: vulnerabilities/CVEs, exploits, malware/reverse engineering, threat intel, pentest/red team, blue team/IR/SOC, forensics, AppSec/secure coding, cloud security/IAM, ICS/OT/IoT security, policy/compliance when written for practitioners.
-#
-# COMPUTER_SYSTEMS — Linux/Unix/Windows admin, filesystems, processes, services, systemd, Docker/K8s, virtualization, Terraform/Ansible used operationally.
-#
-# SOFTWARE_DEVELOPMENT — SDLC/CI/CD, code review, dependency management, secure coding practices when general, Git usage impacting code integrity.
-#
-# CRYPTOGRAPHY — Practical cryptography: hashing, encryption, signatures, TLS, key management (not pure math proofs).
-#
-# OS_COMMAND — Terminal/PowerShell/CMD usage, shell pipelines, admin scripts, package managers, config snippets focused on operating systems behavior.
-#
-# NETWORK_PROTOCOL — TCP/IP, DNS, HTTP/TLS, SSH, SMTP, BGP/OSPF—protocol mechanics, packet structure, handshake/state machines.
-#
-# PROGRAMMING — General coding without a security angle (Python/Go/C/C++/JS snippets, API usage, tutorials not tied to security).
-#
-# OTHER — Everything else.
-#
-# Classify the input text provided by the user into one of the specified labels and explain your reasoning.
-#
-# """
+## Definition:
+
+**Bars or Sports Bars or Hookah Bars or Wine Bars or Cocktail Bars** - Establishments that focus on alcohol, cocktails, hookah, late hours, or a bar-first atmosphere. Reviews may highlight bartenders and drink programs more than food.
+
+## Decision:
+
+Return `HAS_ALCOHOL_FOCUS_SIGNALS: true` if the establishment fits this definition.
+
+Return a `false` value if it's primarily a food-focused restaurant."""
+    #     SYSTEM_PROMPT = """
+    #
+    # You are a precise document classifier.
+    #
+    # # Objective
+    # Your task is to classify the provided text into one of the labels below.
+    #
+    # # Guidelines
+    # - Classify the text based on its primary topic. The classification should reflect what the document is predominantly about. If the majority of the document discusses topics unrelated to the available labels, but only a small portion mentions content that would fit one of the defined labels, classify the document as OTHER.
+    #
+    # # Labels
+    # CYBERSECURITY — Security content proper: vulnerabilities/CVEs, exploits, malware/reverse engineering, threat intel, pentest/red team, blue team/IR/SOC, forensics, AppSec/secure coding, cloud security/IAM, ICS/OT/IoT security, policy/compliance when written for practitioners.
+    #
+    # COMPUTER_SYSTEMS — Linux/Unix/Windows admin, filesystems, processes, services, systemd, Docker/K8s, virtualization, Terraform/Ansible used operationally.
+    #
+    # SOFTWARE_DEVELOPMENT — SDLC/CI/CD, code review, dependency management, secure coding practices when general, Git usage impacting code integrity.
+    #
+    # CRYPTOGRAPHY — Practical cryptography: hashing, encryption, signatures, TLS, key management (not pure math proofs).
+    #
+    # OS_COMMAND — Terminal/PowerShell/CMD usage, shell pipelines, admin scripts, package managers, config snippets focused on operating systems behavior.
+    #
+    # NETWORK_PROTOCOL — TCP/IP, DNS, HTTP/TLS, SSH, SMTP, BGP/OSPF—protocol mechanics, packet structure, handshake/state machines.
+    #
+    # PROGRAMMING — General coding without a security angle (Python/Go/C/C++/JS snippets, API usage, tutorials not tied to security).
+    #
+    # OTHER — Everything else.
+    #
+    # Classify the input text provided by the user into one of the specified labels and explain your reasoning.
+    #
+    # """
 
     # Configuration
     PARQUET_PATH = "/Users/cooperlarhette/Downloads/jobs_2025-10-07_user-a0d28ecc-10c9-489f-9b2d-51658e3f12aa_job-47518aa2-45a9-4865-a398-a6af39e06e6c_inputs_inputs_part_0.snappy.parquet"
+    CSV_PATH = "/Users/cooperlarhette/code/sutro-client/owner-concept-fit/Balacned Corrected - balanced_sample.csv"
     INPUT_COLUMN = "SKYSIGHT_PROMPTS"
     FRONTIER_MODEL = "openrouter/openai/gpt-5"
-    GOLDEN_MODEL = "openrouter/openai/gpt-5"
-    TARGET_MODEL = "openrouter/openai/gpt-oss-20b"
+    GOLDEN_MODEL = "geme"
+    TARGET_MODEL = "openrouter/openai/gpt-oss-120b"
 
     # Speed modes - choose one:
     # The BUDGET (max_metric_calls) is the main speed control
@@ -502,9 +529,9 @@ Abstract:
 
     if MODE == "fast":
         # ~30-45 minutes total
-        N_SAMPLES = 450        # Fewer examples = faster golden creation
-        MAX_METRIC_CALLS = 2000           # Fewer evaluations = faster optimization
-        MAX_RUNTIME_MINUTES = 30      # 1 hour safety limit
+        N_SAMPLES = 63  # Fewer examples = faster golden creation
+        MAX_METRIC_CALLS = 2000  # Fewer evaluations = faster optimization
+        MAX_RUNTIME_MINUTES = 20  # 1 hour safety limit
     elif MODE == "balanced":
         # ~1-2 hours total (recommended)
         N_SAMPLES = 100
@@ -516,9 +543,9 @@ Abstract:
         MAX_METRIC_CALLS = 300
         MAX_RUNTIME_MINUTES = 240
 
-    print("="*80)
+    print("=" * 80)
     print("GEPA OPTIMIZATION: PATENT ANALYSIS")
-    print("="*80)
+    print("=" * 80)
     print(f"Goal: Optimize prompt from {FRONTIER_MODEL} → {TARGET_MODEL}")
     print(f"Mode: {MODE.upper()}")
     print(f"  - Samples: {N_SAMPLES}")
@@ -537,21 +564,45 @@ Abstract:
     #     use_existing=True,  # Set to False to force regeneration
     # )
 
+    def format_user_message(row):
+        return f"""RESTAURANT DATA FROM GOOGLE PLACES:
+Name: {row["locationName"]}
+Google Place Types: {row["types"]}
+Editorial Summary: {row["editorialSummary"]}
+Generative Summary: {row["generativeSummary"]}
+Amenities: {row["amenities"]}
+Price Level and Range: {row["priceLevel"]}, {row["priceRange"]}
+Opening Hours: {row["openingHours"]}
+Review Summary: {row["reviewSummary"]}
+Recent Reviews: {row["reviews"]}
 
-    load_dotenv()
-    dataset = load_dataset("ccdv/patent-classification", "abstract")
+RESTAURANT DATA FROM BRIZO:
+Amenities according to Brizo: {row["BRIZO_AMENITIES"]}
+Meals according to Brizo: {row["BRIZO_MEALS"]}
+Market segment according to Brizo: {row["BRIZO_MARKET_SEGMENT"]}
+Ambiances according to Brizo: {row["BRIZO_AMBIANCES"]}
+Business types according to Brizo: {row["BRIZO_BUSINESS_TYPES"]}"""
+
+    class HasAlcoholFocusSignals(BaseModel):
+        HAS_ALCOHOL_FOCUS_SIGNALS: bool = Field(
+            description="True if matches the described category"
+        )
 
     # Convert to pandas dataframe (using the train split)
-    df = dataset["train"].to_pandas()
+    df = pl.read_csv(CSV_PATH)
 
     # Get first 400 examples in the required format
     examples: list[DataInst] = [
         {
-            "input": row["text"],
-            "golden_output": row["label"],
+            "input": format_user_message(row),
+            "golden_output": HasAlcoholFocusSignals(
+                HAS_ALCOHOL_FOCUS_SIGNALS=row["HAS_ALCOHOL_FOCUS_SIGNALS"]
+            ).model_dump(mode="json"),
         }
-        for _, row in df.head(400).iterrows()
+        for  row in df[1:64].iter_rows(named=True)
     ]
+
+    print(examples[0])
 
     # Step 2: Optimize prompt
     result = optimize_prompt(
@@ -563,11 +614,11 @@ Abstract:
         reflection_lm=FRONTIER_MODEL,
         # max_metric_calls=MAX_METRIC_CALLS,
         output_dir="./patent_optimization",
-        max_runtime_minutes=MAX_RUNTIME_MINUTES
+        max_runtime_minutes=MAX_RUNTIME_MINUTES,
     )
 
     # Step 3: Save results
-    with open("patent_optimization/final_result.json", 'w') as f:
+    with open("patent_optimization/final_result.json", "w") as f:
         json.dump(result, f, indent=2)
 
     print("\n✓ Results saved to patent_optimization/final_result.json")
