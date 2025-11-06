@@ -5,7 +5,6 @@ Example: Optimize patent analysis prompt from GPT-4o to Qwen-3-4B
 """
 
 import json
-import re
 import time
 from datetime import timedelta
 from typing import Any, TypedDict, Tuple
@@ -16,7 +15,6 @@ import polars as pl
 import gepa
 from gepa import GEPAResult, TimeoutStopCondition
 from gepa.core.adapter import EvaluationBatch, GEPAAdapter
-from litellm.responses.main import responses
 from pydantic import BaseModel, Field
 
 
@@ -141,67 +139,72 @@ class LLMJudge:
     ) -> list[Tuple[float, str]]:
         """Score multiple outputs in parallel using batch_completion."""
         # Create prompts for all items
-#         messages_list = [
-#             [
-#                 {
-#                     "role": "user",
-#                     "content": f"""You are evaluating a generated response against a reference response. The generated response was generated after being given the task instructions and the given inmput.
-#
-# **Task Instructions:** {system_prompt}
-#
-# **Input:** {inp}
-#
-# **Reference:** {gold}
-#
-# **Generated:** {gen}
-#
-# **Scoring:**
-# CORRECT (1.0): Contains all key information, no significant errors, closely matches reference response
-# PARTIAL (0.5): Some correct info but missing key elements or minor errors, generally doesn't match reference response
-# WRONG (0.0): Major errors, missing most information, or unusable
-#
-# Format: SCORE: [0.0, 0.5, or 1.0]
-# REASON: [one sentence]
-#
-# SCORE:""",
-#                 }
-#             ]
-#             for inp, gold, gen in zip(inputs, goldens, generateds)
-#         ]
-#
-#         # Batch call to LiteLLM
-#         responses = litellm.batch_completion(
-#             model=self.judge_model,
-#             messages=messages_list,
-#             temperature=0,
-#             max_workers=10,
-#         )
-#
-#         # Parse all responses
-#         results = []
-#         for response in responses:
-#             if isinstance(response, litellm.APIError):
-#                 print("ERROR", response)
-#             content = response.choices[0].message.content
-#
-#             # Parse score
-#             score_match = re.search(r"SCORE:\s*(0\.0|0\.5|1\.0)", content)
-#             score = float(score_match.group(1)) if score_match else 0.0
-#
-#             # Parse reasoning
-#             reason_match = re.search(r"REASON:\s*(.+?)(?:\n|$)", content, re.IGNORECASE)
-#             reasoning = reason_match.group(1).strip() if reason_match else content[:200]
-#
-#             results.append((score, reasoning))
+        #         messages_list = [
+        #             [
+        #                 {
+        #                     "role": "user",
+        #                     "content": f"""You are evaluating a generated response against a reference response. The generated response was generated after being given the task instructions and the given inmput.
+        #
+        # **Task Instructions:** {system_prompt}
+        #
+        # **Input:** {inp}
+        #
+        # **Reference:** {gold}
+        #
+        # **Generated:** {gen}
+        #
+        # **Scoring:**
+        # CORRECT (1.0): Contains all key information, no significant errors, closely matches reference response
+        # PARTIAL (0.5): Some correct info but missing key elements or minor errors, generally doesn't match reference response
+        # WRONG (0.0): Major errors, missing most information, or unusable
+        #
+        # Format: SCORE: [0.0, 0.5, or 1.0]
+        # REASON: [one sentence]
+        #
+        # SCORE:""",
+        #                 }
+        #             ]
+        #             for inp, gold, gen in zip(inputs, goldens, generateds)
+        #         ]
+        #
+        #         # Batch call to LiteLLM
+        #         responses = litellm.batch_completion(
+        #             model=self.judge_model,
+        #             messages=messages_list,
+        #             temperature=0,
+        #             max_workers=10,
+        #         )
+        #
+        #         # Parse all responses
+        #         results = []
+        #         for response in responses:
+        #             if isinstance(response, litellm.APIError):
+        #                 print("ERROR", response)
+        #             content = response.choices[0].message.content
+        #
+        #             # Parse score
+        #             score_match = re.search(r"SCORE:\s*(0\.0|0\.5|1\.0)", content)
+        #             score = float(score_match.group(1)) if score_match else 0.0
+        #
+        #             # Parse reasoning
+        #             reason_match = re.search(r"REASON:\s*(.+?)(?:\n|$)", content, re.IGNORECASE)
+        #             reasoning = reason_match.group(1).strip() if reason_match else content[:200]
+        #
+        #             results.append((score, reasoning))
 
         results = []
         for pred, gold in zip(generateds, goldens):
-            print('pred', pred, gold)
-            if HasAlcoholFocusSignals(**json.loads(pred)) == gold:
-                results.append((1.0, "The generated output matched the golden output exactly."))
+            print("pred", pred, gold, pred == gold)
+            if pred == gold:
+                results.append(
+                    (1.0, "The generated output matched the golden output exactly.")
+                )
             else:
                 results.append(
-                    (0.0, f"The generated output for this input did not match the golden output. The golden was {gold}, while the generated was {pred}.")
+                    (
+                        0.0,
+                        f"The generated output for this input did not match the golden output. The golden was {gold}, while the generated was {pred}.",
+                    )
                 )
 
         return results
@@ -236,14 +239,14 @@ Keep in mind that this feedback may be incorporated into a prompt for a weaker a
 
 Issues and improvements:"""
 
-        print('PROMPT', prompt)
+        print("PROMPT", prompt)
 
         feedback = (
             litellm.completion(
                 model=self.judge_model,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.3,
-                max_tokens=4096
+                max_tokens=4096,
             )
             .choices[0]
             .message.content
@@ -259,7 +262,7 @@ class SutroPromptAdapter(GEPAAdapter[DataInst, dict, RolloutOutput]):
         target_model: str,
         golden_model_name: str,
         judge_model: str,
-        max_workers: int = 10,
+        max_workers: int = 1,
     ):
         self.target_model = target_model
         self.judge = LLMJudge(judge_model, golden_model_name)
@@ -285,15 +288,17 @@ class SutroPromptAdapter(GEPAAdapter[DataInst, dict, RolloutOutput]):
         # Execute target model
         responses = [
             # TODO need to pass in default or user provider sampling params here
-            resp.choices[0].message.content
+            resp
             for resp in litellm.batch_completion(
                 model=self.target_model,
                 messages=messages_batch,
                 max_workers=self.max_workers,
-                response_format=HasAlcoholFocusSignals,
-                temperature=0
+                response_format=Output,
+                temperature=0,
             )
         ]
+
+        response_messages = [json.loads(resp.choices[0].message.content) for resp in responses]
 
         # Score each response
         outputs = []
@@ -302,13 +307,15 @@ class SutroPromptAdapter(GEPAAdapter[DataInst, dict, RolloutOutput]):
 
         inputs = [data["input"] for data in batch]
         goldens = [data["golden_output"] for data in batch]
-        generateds = responses
+
         batch_results = self.judge.score_batch(
-            system_prompt, inputs, goldens, generateds
+            system_prompt, inputs, goldens, response_messages
         )
 
         # Process results
-        for data, response, (score, reasoning) in zip(batch, responses, batch_results):
+        for data, response, (score, reasoning) in zip(
+            batch, response_messages, batch_results
+        ):
             outputs.append({"generated": response, "score": score})
             scores.append(score)
 
@@ -388,7 +395,7 @@ def optimize_prompt(
     """
 
     # Split train/val
-    split_idx = int(len(examples) * 0.8)
+    split_idx = int(len(examples) * 0.7)
     trainset = examples[:split_idx]
     valset = examples[split_idx:]
 
@@ -459,6 +466,9 @@ def optimize_prompt(
     print("-" * 80)
     print(opt_result.best_candidate["system_prompt"])
     print(opt_result.val_aggregate_scores[opt_result.best_idx])
+    print("\n" + "=" * 80)
+    print(opt_result.val_aggregate_scores)
+    print(opt_result.candidates)
     print("-" * 80)
 
     return {
@@ -473,17 +483,93 @@ def optimize_prompt(
 if __name__ == "__main__":
     # Your patent analysis prompt
 
-    SYSTEM_PROMPT = """You are evaluating whether a restaurant is primarily a bar or alcohol-focused establishment.
+    SYSTEM_PROMPT = """
+Data you may receive
+- Google Places: Name, Google Place Types, Editorial Summary, Generative Summary, Amenities, Price, Hours, Review Summary, Recent Reviews.
+- Any field can be missing. Never infer missing information.
 
-## Definition:
+Core definitions
+- Alcohol-focused (bar-first): The primary experience is drinking—cocktails, beer/wine programs, hookah, or a late-night bar atmosphere.
+- Typical bar-first concepts: bar, sports bar, hookah bar, wine bar, cocktail bar, pub, tavern, taproom, saloon, and lounge when clearly a bar concept (e.g., cocktail lounge, hookah lounge, ultra lounge).
+- Food-first: Cuisine/restaurant-led (e.g., taqueria, Thai, Indian, sushi, vegetarian/vegan restaurants, quick service, coffee/juice shops, bakeries).
 
-**Bars or Sports Bars or Hookah Bars or Wine Bars or Cocktail Bars** - Establishments that focus on alcohol, cocktails, hookah, late hours, or a bar-first atmosphere. Reviews may highlight bartenders and drink programs more than food.
+Decision rule (threshold)
+- Return true only if:
+  - At least 1 decisive signal is present; or
+  - At least 2 strong signals are present.
+- Otherwise return false. Default to false when a cuisine-first identity exists or evidence is mixed.
 
-## Decision:
+Decisive signals (any one → true)
+- Primary identity clearly bar-first in name/types/summaries:
+  - Explicit bar-first terms in the Name or Google Place Types such as “hookah bar,” “wine bar,” “cocktail bar,” “sports bar,” “pub,” “tavern,” “taproom,” “saloon,” or “lounge” when explicitly a bar/lounge concept (e.g., “cocktail lounge,” “hookah lounge,” “ultra lounge”).
+- Strong editorial or generative summary that clearly frames the venue as a bar-first experience (e.g., “craft cocktail bar,” “wine bar,” “taproom”), not cuisine-first.
+- Brewery taproom identity (taproom, brewery-led tasting room). Brewpubs count only if clearly brewery-led rather than restaurant-led.
 
-Return `HAS_ALCOHOL_FOCUS_SIGNALS: true` if the establishment fits this definition.
+Strong signals (need 2 if no decisive signal)
+- Bar-first identity in Name or Google Place Types (sports_bar, bar, pub, tavern, lounge, taproom, saloon) when dominant over cuisine/restaurant tags and not overshadowed by a food-led identity. A lone “bar” type among many cuisine/restaurant types is not strong.
+- Late-night hours (strict):
+  - Open past 11:00 pm (i.e., later than 11:00) on 3+ nights; or
+  - Open midnight (12:00 am) or later on 2+ nights, including at least one non-weekend night; weekend-only midnight (Fri/Sat) is supporting only, not strong.
+- Reviews: multiple mentions emphasizing drinks/bartenders/mixology/beer list/wine program/bar vibes/hookah as the highlight over food.
+- Editorial/generative summaries that lead with drinks/bar program or a bar-first experience (and are not clearly cuisine-first).
+- Bar-focused activities (e.g., trivia nights, game-day watch parties, happy hour) when coupled with other bar signals.
 
-Return a `false` value if it's primarily a food-focused restaurant."""
+Weak/supporting signals (never enough alone)
+- Amenities like servesBeer/servesWine/servesCocktails or generic “Alcohol.”
+- A single “bar” type among many cuisine/restaurant types when name/summaries/reviews are food-first.
+- “Bar & Grill” or “bar_and_grill” types without other evidence (often restaurant-forward).
+- Happy hour mention without other bar-first indicators.
+- TV/sports mentions without a “sports bar” identity.
+- Standard restaurant hours (closing around 9–10 pm).
+- Open until midnight only on Fri/Sat for a food-first restaurant.
+- Editorial/generative summaries that primarily describe food/cuisine and only mention drinks on the side.
+- Phrases like “raw bar,” “bustling bar,” or “creative cocktails” inside a food-led identity are supporting only unless corroborated by other strong bar signals.
+
+Hours guidance (strict)
+- “Past 11 pm” means later than 11:00 pm. Exactly 11:00 pm does not qualify.
+- Strong late-night requires:
+  - Past 11 pm on 3+ nights; or
+  - Midnight+ on 2+ nights with at least one non-weekend night (Fri/Sat-only midnight is supporting only).
+- Weekend-only midnight (Fri/Sat) never counts as a strong signal by itself.
+
+Tie-breakers and weighting
+- Prioritize the primary identity inferred from: Name + Types + Summaries + Hours + Review emphasis.
+- Cuisine-first names and types (e.g., Taqueria, Mexican restaurant, Thai, Sushi, Hibachi, Indian, Vegetarian/Vegan, Bakery, Coffee/Tea/Juice) indicate non–alcohol-focused unless a decisive signal or two strong signals clearly support bar-first.
+- Down-weight a lone “bar” type when multiple restaurant/cuisine types and food-led summaries/reviews dominate.
+- Do not rely solely on Brizo “Late Night,” “Nightlife,” or “Sports” flags—require corroboration from hours/summaries/reviews.
+- Treat “lounge” as decisive only when clearly a bar/lounge concept (e.g., “cocktail lounge,” “hookah lounge”); generic “lounge” without bar context is not decisive.
+- Brewery taprooms count; brewpubs count only if brewery-led rather than restaurant-led.
+
+Negative archetypes (default to false)
+- Cuisine-first restaurants (Mexican/Thai/Indian/Sushi/Hibachi/etc.) with standard dinner hours (~9–10 pm) and food-led summaries/reviews, even if they:
+  - serve cocktails/margaritas,
+  - include a “bar” or “bar_and_grill” type,
+- Quick-service or burger/wings spots open late but food-first with no drink-centric reviews.
+- Polished American restaurants with a “raw bar,” “creative cocktails,” or a “bustling bar,” closing by 10–11 pm most nights.
+- Example: A taqueria with “bar” type, food-led summaries, and midnight hours only on Fri/Sat should be false unless another strong/decisive bar signal exists.
+
+Handling missing fields
+- If fields are missing, do not infer bar-focus. Use only available identity signals. Default to false without decisive or two strong signals.
+
+Suggested evaluation steps
+1) Name and Google Place Types:
+   - Look for clear bar-first identity (cocktail bar, wine bar, sports bar, taproom, pub, tavern, saloon, hookah bar, or explicit bar/lounge concept). If yes and not overshadowed by cuisine-first identity, that’s decisive → true.
+2) Editorial/Generative summaries:
+   - Do they lead with drinks/bar program or with food/cuisine? Food-led → likely false unless decisive/other strong signals exist.
+3) Hours:
+   - Apply strict late-night criteria. Exactly 11:00 pm closings do not qualify. Weekend-only midnight is supporting only.
+4) Reviews:
+   - Look for multiple references highlighting cocktails/mixology, beer/wine programs, bartenders, bar vibes, or hookah more than food.
+6) Apply threshold:
+   - 1 decisive signal → true. Otherwise require at least 2 strong signals.
+   - If uncertain or mixed with a food-first identity → false.
+
+Output
+- Return exactly one JSON object:
+  {"decision": true}
+  or
+  {"decision": false}
+- Use lowercase JSON booleans. Output nothing else."""
     #     SYSTEM_PROMPT = """
     #
     # You are a precise document classifier.
@@ -517,11 +603,11 @@ Return a `false` value if it's primarily a food-focused restaurant."""
 
     # Configuration
     PARQUET_PATH = "/Users/cooperlarhette/Downloads/jobs_2025-10-07_user-a0d28ecc-10c9-489f-9b2d-51658e3f12aa_job-47518aa2-45a9-4865-a398-a6af39e06e6c_inputs_inputs_part_0.snappy.parquet"
-    CSV_PATH = "/Users/cooperlarhette/code/sutro-client/owner-concept-fit/Balacned Corrected - balanced_sample.csv"
+    CSV_PATH = "/Users/cooperlarhette/code/sutro-client/owner-concept-fit/Balanced Corrected - balanced_sample.csv"
     INPUT_COLUMN = "SKYSIGHT_PROMPTS"
     FRONTIER_MODEL = "openrouter/openai/gpt-5"
     GOLDEN_MODEL = "geme"
-    TARGET_MODEL = "openrouter/openai/gpt-oss-120b"
+    TARGET_MODEL = "baseten/openai/gpt-oss-120b"
 
     # Speed modes - choose one:
     # The BUDGET (max_metric_calls) is the main speed control
@@ -530,7 +616,7 @@ Return a `false` value if it's primarily a food-focused restaurant."""
     if MODE == "fast":
         # ~30-45 minutes total
         N_SAMPLES = 63  # Fewer examples = faster golden creation
-        MAX_METRIC_CALLS = 2000  # Fewer evaluations = faster optimization
+        MAX_METRIC_CALLS = 500  # Fewer evaluations = faster optimization
         MAX_RUNTIME_MINUTES = 20  # 1 hour safety limit
     elif MODE == "balanced":
         # ~1-2 hours total (recommended)
@@ -574,19 +660,10 @@ Amenities: {row["amenities"]}
 Price Level and Range: {row["priceLevel"]}, {row["priceRange"]}
 Opening Hours: {row["openingHours"]}
 Review Summary: {row["reviewSummary"]}
-Recent Reviews: {row["reviews"]}
+Recent Reviews: {row["reviews"]}"""
 
-RESTAURANT DATA FROM BRIZO:
-Amenities according to Brizo: {row["BRIZO_AMENITIES"]}
-Meals according to Brizo: {row["BRIZO_MEALS"]}
-Market segment according to Brizo: {row["BRIZO_MARKET_SEGMENT"]}
-Ambiances according to Brizo: {row["BRIZO_AMBIANCES"]}
-Business types according to Brizo: {row["BRIZO_BUSINESS_TYPES"]}"""
-
-    class HasAlcoholFocusSignals(BaseModel):
-        HAS_ALCOHOL_FOCUS_SIGNALS: bool = Field(
-            description="True if matches the described category"
-        )
+    class Output(BaseModel):
+        decision: bool
 
     # Convert to pandas dataframe (using the train split)
     df = pl.read_csv(CSV_PATH)
@@ -595,14 +672,12 @@ Business types according to Brizo: {row["BRIZO_BUSINESS_TYPES"]}"""
     examples: list[DataInst] = [
         {
             "input": format_user_message(row),
-            "golden_output": HasAlcoholFocusSignals(
-                HAS_ALCOHOL_FOCUS_SIGNALS=row["HAS_ALCOHOL_FOCUS_SIGNALS"]
+            "golden_output": Output(
+                decision=row["HAS_ALCOHOL_FOCUS_SIGNALS"]
             ).model_dump(mode="json"),
         }
-        for  row in df[1:64].iter_rows(named=True)
+        for row in df.iter_rows(named=True)
     ]
-
-    print(examples[0])
 
     # Step 2: Optimize prompt
     result = optimize_prompt(
@@ -612,9 +687,9 @@ Business types according to Brizo: {row["BRIZO_BUSINESS_TYPES"]}"""
         golden_model_name=FRONTIER_MODEL,
         judge_model=FRONTIER_MODEL,
         reflection_lm=FRONTIER_MODEL,
-        # max_metric_calls=MAX_METRIC_CALLS,
+        max_metric_calls=1000,
         output_dir="./patent_optimization",
-        max_runtime_minutes=MAX_RUNTIME_MINUTES,
+        # max_runtime_minutes=MAX_RUNTIME_MINUTES,
     )
 
     # Step 3: Save results
