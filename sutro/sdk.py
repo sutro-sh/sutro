@@ -1,49 +1,32 @@
-from enum import Enum
 import requests
 import pandas as pd
 import polars as pl
 import json
-from typing import Union, List, Optional, Literal, Dict, Any
+from typing import Union, List, Optional, Dict, Any, Type
 import os
 import sys
 from yaspin import yaspin
 from yaspin.spinners import Spinners
-from colorama import init, Fore, Style
-from tqdm import tqdm
+from colorama import init
 import time
 from pydantic import BaseModel
 import pyarrow.parquet as pq
 import shutil
-import importlib.metadata
+from sutro.common import (
+    ModelOptions,
+    handle_data_helper,
+    normalize_output_schema,
+    to_colored_text,
+    fancy_tqdm,
+)
+from sutro.interfaces import JobStatus
+from sutro.templates.classification import ClassificationTemplates
+from sutro.templates.embed import EmbeddingTemplates
+from sutro.templates.evals import EvalTemplates
+from sutro.validation import check_version, check_for_api_key
 
 JOB_NAME_CHAR_LIMIT = 45
 JOB_DESCRIPTION_CHAR_LIMIT = 512
-
-
-class JobStatus(str, Enum):
-    """Job statuses that will be returned by the API & SDK"""
-
-    UNKNOWN = "UNKNOWN"
-    QUEUED = "QUEUED"  # Job is waiting to start
-    STARTING = "STARTING"  # Job is in the process of starting up
-    RUNNING = "RUNNING"  # Job is actively running
-    SUCCEEDED = "SUCCEEDED"  # Job completed successfully
-    CANCELLING = "CANCELLING"  # Job is in the process of being canceled
-    CANCELLED = "CANCELLED"  # Job was canceled by the user
-    FAILED = "FAILED"  # Job failed
-
-    @classmethod
-    def terminal_statuses(cls) -> list["JobStatus"]:
-        return [
-            cls.SUCCEEDED,
-            cls.FAILED,
-            cls.CANCELLING,
-            cls.CANCELLED,
-        ]
-
-    def is_terminal(self) -> bool:
-        return self in self.terminal_statuses()
-
 
 # Initialize colorama (required for Windows)
 init()
@@ -58,64 +41,6 @@ def is_jupyter() -> bool:
 # things
 BASE_OUTPUT_COLOR = None if is_jupyter() else "blue"
 SPINNER = Spinners.dots14
-
-# Models available for inference.  Keep in sync with the backend configuration
-# so users get helpful autocompletion when selecting a model.
-ModelOptions = Literal[
-    "llama-3.2-3b",
-    "llama-3.1-8b",
-    "llama-3.3-70b",
-    "llama-3.3-70b",
-    "qwen-3-4b",
-    "qwen-3-14b",
-    "qwen-3-32b",
-    "qwen-3-30b-a3b",
-    "qwen-3-235b-a22b",
-    "qwen-3-4b-thinking",
-    "qwen-3-14b-thinking",
-    "qwen-3-32b-thinking",
-    "qwen-3-235b-a22b-thinking",
-    "qwen-3-30b-a3b-thinking",
-    "gemma-3-4b-it",
-    "gemma-3-12b-it",
-    "gemma-3-27b-it",
-    "gpt-oss-20b",
-    "gpt-oss-120b",
-    "qwen-3-embedding-0.6b",
-    "qwen-3-embedding-6b",
-    "qwen-3-embedding-8b",
-]
-
-
-def to_colored_text(
-    text: str, state: Optional[Literal["success", "fail", "callout"]] = None
-) -> str:
-    """
-    Apply color to text based on state.
-
-    Args:
-        text (str): The text to color
-        state (Optional[Literal['success', 'fail']]): The state that determines the color.
-            Options: 'success', 'fail', or None (default blue)
-
-    Returns:
-        str: Text with appropriate color applied
-    """
-    # Adding a color to the text breaks the spinner and makes it so
-    # stale/previous text doesn't get flushed
-    if is_jupyter:
-        return text
-
-    match state:
-        case "success":
-            return f"{Fore.GREEN}{text}{Style.RESET_ALL}"
-        case "fail":
-            return f"{Fore.RED}{text}{Style.RESET_ALL}"
-        case "callout":
-            return f"{Fore.MAGENTA}{text}{Style.RESET_ALL}"
-        case _:
-            # Default to blue for normal/processing states
-            return f"{Fore.BLUE}{text}{Style.RESET_ALL}"
 
 
 # Isn't fully support in all terminals unfortunately. We should switch to Rich
@@ -134,62 +59,11 @@ def make_clickable_link(url, text=None):
     return f"\033]8;;{url}\033\\{text}\033]8;;\033\\"
 
 
-class Sutro:
+class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
     def __init__(self, api_key: str = None, base_url: str = "https://api.sutro.sh/"):
-        self.api_key = api_key or self.check_for_api_key()
+        self.api_key = api_key or check_for_api_key()
         self.base_url = base_url
-        self.check_version("sutro")
-
-    def check_version(self, package_name: str):
-        try:
-            # Local version
-            local_version = importlib.metadata.version(package_name)
-        except importlib.metadata.PackageNotFoundError:
-            print(f"{package_name} is not installed.")
-            return
-
-        try:
-            # Latest release from PyPI
-            resp = requests.get(f"https://pypi.org/pypi/{package_name}/json", timeout=2)
-            resp.raise_for_status()
-            latest_version = resp.json()["info"]["version"]
-
-            if local_version != latest_version:
-                msg = (
-                    f"⚠️  You are using {package_name} {local_version}, "
-                    f"but the latest release is {latest_version}. "
-                    f"Run `[uv] pip install -U {package_name}` to upgrade."
-                )
-                print(to_colored_text(msg, state="callout"))
-        except Exception:
-            # Fail silently or log, you don’t want this blocking usage
-            pass
-
-    def check_for_api_key(self):
-        """
-        Check for an API key in the user's home directory.
-
-        This method looks for a configuration file named 'config.json' in the
-        '.sutro' directory within the user's home directory.
-        If the file exists, it attempts to read the API key from it.
-
-        Returns:
-            str or None: The API key if found in the configuration file, or None if not found.
-
-        Note:
-            The expected structure of the config.json file is:
-            {
-                "api_key": "your_api_key_here"
-            }
-        """
-        CONFIG_DIR = os.path.expanduser("~/.sutro")
-        CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
-        if os.path.exists(CONFIG_FILE):
-            with open(CONFIG_FILE, "r") as f:
-                config = json.load(f)
-            return config.get("api_key")
-        else:
-            return None
+        check_version("sutro")
 
     def set_api_key(self, api_key: str):
         """
@@ -206,85 +80,6 @@ class Sutro:
         """
         self.api_key = api_key
 
-    def do_dataframe_column_concatenation(
-        self, data: Union[pd.DataFrame, pl.DataFrame], column: Union[str, List[str]]
-    ):
-        """
-        If the user has supplied a dataframe and a list of columns, this will intelligenly concatenate the columns into a single column, accepting separator strings.
-        """
-        try:
-            if isinstance(data, pd.DataFrame):
-                series_parts = []
-                for p in column:
-                    if p in data.columns:
-                        s = data[p].astype("string").fillna("")
-                    else:
-                        # Treat as a literal separator
-                        s = pd.Series([p] * len(data), index=data.index, dtype="string")
-                    series_parts.append(s)
-
-                out = series_parts[0]
-                for s in series_parts[1:]:
-                    out = out.str.cat(s, na_rep="")
-
-                return out.tolist()
-            elif isinstance(data, pl.DataFrame):
-                exprs = []
-                for p in column:
-                    if p in data.columns:
-                        exprs.append(pl.col(p).cast(pl.Utf8).fill_null(""))
-                    else:
-                        exprs.append(pl.lit(p))
-
-                result = data.select(
-                    pl.concat_str(exprs, separator="", ignore_nulls=False).alias(
-                        "concat"
-                    )
-                )
-                return result["concat"].to_list()
-        except Exception as e:
-            raise ValueError(f"Error handling column concatentation: {e}")
-
-    def handle_data_helper(
-        self, data: Union[List, pd.DataFrame, pl.DataFrame, str], column: str = None
-    ):
-        if isinstance(data, list):
-            input_data = data
-        elif isinstance(data, (pd.DataFrame, pl.DataFrame)):
-            if column is None:
-                raise ValueError("Column name must be specified for DataFrame input")
-            if isinstance(column, list):
-                input_data = self.do_dataframe_column_concatenation(data, column)
-            elif isinstance(column, str):
-                input_data = data[column].to_list()
-        elif isinstance(data, str):
-            if data.startswith("dataset-"):
-                input_data = data + ":" + column
-            else:
-                file_ext = os.path.splitext(data)[1].lower()
-                if file_ext == ".csv":
-                    df = pl.read_csv(data)
-                elif file_ext == ".parquet":
-                    df = pl.read_parquet(data)
-                elif file_ext in [".txt", ""]:
-                    with open(data, "r") as file:
-                        input_data = [line.strip() for line in file]
-                else:
-                    raise ValueError(f"Unsupported file type: {file_ext}")
-
-                if file_ext in [".csv", ".parquet"]:
-                    if column is None:
-                        raise ValueError(
-                            "Column name must be specified for CSV/Parquet input"
-                        )
-                    input_data = df[column].to_list()
-        else:
-            raise ValueError(
-                "Unsupported data type. Please provide a list, DataFrame, or file path."
-            )
-
-        return input_data
-
     def set_base_url(self, base_url: str):
         """
         Set the base URL for the Sutro API.
@@ -296,6 +91,43 @@ class Sutro:
             base_url (str): The base URL to set.
         """
         self.base_url = base_url
+
+    def do_request(
+        self,
+        method: str,
+        endpoint: str,
+        api_key_override: Optional[str] = None,
+        **kwargs: Any,
+    ):
+        """
+        Helper to make authenticated requests.
+        """
+        key = self.api_key if not api_key_override else api_key_override
+        headers = {"Authorization": f"Key {key}"}
+
+        # Merge with any headers passed in kwargs
+        if "headers" in kwargs:
+            headers.update(kwargs.pop("headers"))
+
+        url = f"{self.base_url}/{endpoint.lstrip('/')}"
+
+        # Explicit method dispatch
+        method = method.upper()
+        if method == "GET":
+            response = requests.get(url, headers=headers, **kwargs)
+        elif method == "POST":
+            response = requests.post(url, headers=headers, **kwargs)
+        elif method == "PUT":
+            response = requests.put(url, headers=headers, **kwargs)
+        elif method == "DELETE":
+            response = requests.delete(url, headers=headers, **kwargs)
+        elif method == "PATCH":
+            response = requests.patch(url, headers=headers, **kwargs)
+        else:
+            raise ValueError(f"Unsupported HTTP method: {method}")
+
+        response.raise_for_status()
+        return response
 
     def _run_one_batch_inference(
         self,
@@ -324,12 +156,7 @@ class Sutro:
                 f"Job description cannot exceed {JOB_DESCRIPTION_CHAR_LIMIT} characters."
             )
 
-        input_data = self.handle_data_helper(data, column)
-        endpoint = f"{self.base_url}/batch-inference"
-        headers = {
-            "Authorization": f"Key {self.api_key}",
-            "Content-Type": "application/json",
-        }
+        input_data = handle_data_helper(data, column)
         payload = {
             "model": model,
             "inputs": input_data,
@@ -356,16 +183,18 @@ class Sutro:
 
         try:
             with yaspin(SPINNER, text=spinner_text, color=BASE_OUTPUT_COLOR) as spinner:
-                response = requests.post(
-                    endpoint, data=json.dumps(payload), headers=headers
-                )
-                response_data = response.json()
+                try:
+                    response = self.do_request("POST", "batch-inference", json=payload)
+                    response_data = response.json()
+                except requests.HTTPError as e:
+                    response = e.response
+                    response_data = response.json()
                 if response.status_code != 200:
                     spinner.write(
                         to_colored_text(f"Error: {response.status_code}", state="fail")
                     )
                     spinner.stop()
-                    print(to_colored_text(response.json(), state="fail"))
+                    print(to_colored_text(response_data, state="fail"))
                     return None
                 else:
                     job_id = response_data["results"]
@@ -391,10 +220,11 @@ class Sutro:
                         name_text = f" and name {name}" if name is not None else ""
                         spinner.write(
                             to_colored_text(
-                                f"🛠 Priority {job_priority} Job created with ID: {job_id}{name_text}.",
+                                f"🛠 Priority {job_priority} Job created with ID: {job_id}{name_text}",
                                 state="success",
                             )
                         )
+                        spinner.write(to_colored_text(f"Model: {model}"))
                         if not stay_attached:
                             clickable_link = make_clickable_link(
                                 f"https://app.sutro.sh/jobs/{job_id}"
@@ -431,13 +261,13 @@ class Sutro:
                     )
                 )
                 return None
-            s = requests.Session()
+
             pbar = None
 
             try:
-                with requests.get(
-                    f"{self.base_url}/stream-job-progress/{job_id}",
-                    headers=headers,
+                with self.do_request(
+                    "GET",
+                    f"/stream-job-progress/{job_id}",
                     stream=True,
                 ) as streaming_response:
                     streaming_response.raise_for_status()
@@ -466,7 +296,7 @@ class Sutro:
                                 if pbar is None:
                                     spinner.stop()
                                     postfix = "Input tokens processed: 0"
-                                    pbar = self.fancy_tqdm(
+                                    pbar = fancy_tqdm(
                                         total=len(input_data),
                                         desc="Progress",
                                         style=1,
@@ -507,28 +337,27 @@ class Sutro:
                 )
                 spinner.start()
 
-                payload = {
-                    "job_id": job_id,
-                }
-
                 # TODO: we implment retries in cases where the job hasn't written results yet
                 # it would be better if we could receive a fully succeeded status from the job
                 # and not have such a race condition
                 max_retries = 20  # winds up being 100 seconds cumulative delay
                 retry_delay = 5  # initial delay in seconds
-
+                job_results_response = None
                 for _ in range(max_retries):
-                    time.sleep(retry_delay)
-
-                    job_results_response = s.post(
-                        f"{self.base_url}/job-results",
-                        headers=headers,
-                        data=json.dumps(payload),
-                    )
-                    if job_results_response.status_code == 200:
+                    try:
+                        job_results_response = self.do_request(
+                            "POST",
+                            "job-results",
+                            json={
+                                "job_id": job_id,
+                            },
+                        )
                         break
+                    except requests.HTTPError:
+                        time.sleep(retry_delay)
+                        continue
 
-                if job_results_response.status_code != 200:
+                if not job_results_response or job_results_response.status_code != 200:
                     spinner.write(
                         to_colored_text(
                             "Job succeeded, but results are not yet available. Use `so.get_job_results('{job_id}')` to obtain results.",
@@ -569,13 +398,13 @@ class Sutro:
     def infer(
         self,
         data: Union[List, pd.DataFrame, pl.DataFrame, str],
-        model: Union[ModelOptions, List[ModelOptions]] = "gemma-3-12b-it",
-        name: Union[str, List[str]] = None,
-        description: Union[str, List[str]] = None,
+        model: ModelOptions = "gemma-3-12b-it",
+        name: Optional[str] = None,
+        description: Optional[str] = None,
         column: Union[str, List[str]] = None,
         output_column: str = "inference_result",
         job_priority: int = 0,
-        output_schema: Union[Dict[str, Any], BaseModel] = None,
+        output_schema: Union[Dict[str, Any], Type[BaseModel]] = None,
         sampling_params: dict = None,
         system_prompt: str = None,
         dry_run: bool = False,
@@ -587,18 +416,18 @@ class Sutro:
         Run inference on the provided data.
 
         This method allows you to run inference on the provided data using the Sutro API.
-        It supports various data types such as lists, pandas DataFrames, polars DataFrames, file paths and datasets.
+        It supports various data types such as lists, DataFrames (Polars or Pandas), file paths and datasets.
 
         Args:
             data (Union[List, pd.DataFrame, pl.DataFrame, str]): The data to run inference on.
-            model (Union[ModelOptions, List[ModelOptions]], optional): The model(s) to use for inference. Defaults to "llama-3.1-8b". You can pass a single model or a list of models. In the case of a list, the inference will be run in parallel for each model and stay_attached will be set to False.
-            name (Union[str, List[str]], optional): A job name for experiment/metadata tracking purposes. If using a list of models, you must pass a list of names with length equal to the number of models, or None. Defaults to None.
-            description (Union[str, List[str]], optional): A job description for experiment/metadata tracking purposes. If using a list of models, you must pass a list of descriptions with length equal to the number of models, or None. Defaults to None.
+            model (ModelOptions, optional): The model to use for inference. Defaults to "gemma-3-12b-it".
+            name (str, optional): A job name for experiment/metadata tracking purposes. Defaults to None.
+            description (str, optional): A job description for experiment/metadata tracking purposes. Defaults to None.
             column (Union[str, List[str]], optional): The column name to use for inference. Required if data is a DataFrame, file path, or dataset. If a list is supplied, it will concatenate the columns of the list into a single column, accepting separator strings.
             output_column (str, optional): The column name to store the inference results in if the input is a DataFrame. Defaults to "inference_result".
             job_priority (int, optional): The priority of the job. Defaults to 0.
             output_schema (Union[Dict[str, Any], BaseModel], optional): A structured schema for the output.
-                Can be either a dictionary representing a JSON schema or a pydantic BaseModel. Defaults to None.
+                Can be either a dictionary representing a JSON schema or a class that inherits from Pydantic BaseModel. Defaults to None.
             sampling_params: (dict, optional): The sampling parameters to use at generation time, ie temperature, top_p etc.
             system_prompt (str, optional): A system prompt to add to all inputs. This allows you to define the behavior of the model. Defaults to None.
             dry_run (bool, optional): If True, the method will return cost estimates instead of running inference. Defaults to False.
@@ -610,73 +439,113 @@ class Sutro:
             str: The ID of the inference job.
 
         """
-        if isinstance(model, list) == False:
-            model_list = [model]
-            stay_attached = (
-                stay_attached if stay_attached is not None else job_priority == 0
+        # Default stay_attached to True for prototyping jobs (priority 0)
+        if stay_attached is None:
+            stay_attached = job_priority == 0
+
+        json_schema = None
+        if output_schema:
+            # Convert BaseModel to dict if needed
+            json_schema = normalize_output_schema(output_schema)
+
+        return self._run_one_batch_inference(
+            data,
+            model,
+            column,
+            output_column,
+            job_priority,
+            json_schema,
+            sampling_params,
+            system_prompt,
+            dry_run,
+            stay_attached,
+            random_seed_per_input,
+            truncate_rows,
+            name,
+            description,
+        )
+
+    def infer_per_model(
+        self,
+        data: Union[List, pd.DataFrame, pl.DataFrame, str],
+        models: List[ModelOptions],
+        names: List[str] = None,
+        descriptions: List[str] = None,
+        column: Union[str, List[str]] = None,
+        output_column: str = "inference_result",
+        job_priority: int = 0,
+        output_schema: Union[Dict[str, Any], Type[BaseModel]] = None,
+        sampling_params: dict = None,
+        system_prompt: str = None,
+        dry_run: bool = False,
+        random_seed_per_input: bool = False,
+        truncate_rows: bool = True,
+    ):
+        """
+        Run inference on the provided data, across multiple models. This method is often useful to sampling outputs from multiple models across the same dataset and compare the job_ids.
+
+        For input data, it supports various data types such as lists, DataFrames (Polars or Pandas), file paths and datasets.
+
+        Args:
+            data (Union[List, pd.DataFrame, pl.DataFrame, str]): The data to run inference on.
+            models (Union[ModelOptions, List[ModelOptions]], optional): The models to use for inference. Fans out each model to its own seperate job, over the same dataset.
+            names (Union[str, List[str]], optional): A job name for experiment/metadata tracking purposes. If using a list of models, you must pass a list of names with length equal to the number of models, or None. Defaults to None.
+            descriptions (Union[str, List[str]], optional): A job description for experiment/metadata tracking purposes. If using a list of models, you must pass a list of descriptions with length equal to the number of models, or None. Defaults to None.
+            column (Union[str, List[str]], optional): The column name to use for inference. Required if data is a DataFrame, file path, or dataset. If a list is supplied, it will concatenate the columns of the list into a single column, accepting separator strings.
+            output_column (str, optional): The column name to store the inference job_ids in if the input is a DataFrame. Defaults to "inference_result".
+            job_priority (int, optional): The priority of the job. Defaults to 0.
+            output_schema (Union[Dict[str, Any], BaseModel], optional): A structured schema for the output.
+                Can be either a dictionary representing a JSON schema or a class that inherits from Pydantic BaseModel. Defaults to None.
+            sampling_params: (dict, optional): The sampling parameters to use at generation time, ie temperature, top_p etc.
+            system_prompt (str, optional): A system prompt to add to all inputs. This allows you to define the behavior of the model. Defaults to None.
+            dry_run (bool, optional): If True, the method will return cost estimates instead of running inference. Defaults to False.
+            stay_attached (bool, optional): If True, the method will stay attached to the job until it is complete. Defaults to True for prototyping jobs, False otherwise.
+            random_seed_per_input (bool, optional): If True, the method will use a different random seed for each input. Defaults to False.
+            truncate_rows (bool, optional): If True, any rows that have a token count exceeding the context window length of the selected model will be truncated to the max length that will fit within the context window. Defaults to True.
+
+        Returns:
+            str: The ID of the inference job.
+
+        """
+        if isinstance(names, list):
+            if len(names) != len(models):
+                raise ValueError(
+                    "names parameter must be the same length as the models parameter."
+                )
+        elif names is None:
+            names = [None] * len(models)
+        else:
+            raise ValueError(
+                "names parameter must be  a list or None if using a list of models"
             )
-        else:
-            model_list = model
-            stay_attached = False
 
-        if isinstance(model_list, list):
-            if isinstance(name, list):
-                if len(name) != len(model_list):
-                    raise ValueError(
-                        "Name list must be the same length as the model list."
-                    )
-                name_list = name
-            elif isinstance(name, str):
-                raise ValueError("Name must be a list if using a list of models.")
-            elif name is None:
-                name_list = [None] * len(model_list)
+        if isinstance(descriptions, list):
+            if len(descriptions) != len(models):
+                raise ValueError(
+                    "descriptions parameter must be the same length as the models"
+                    " parameter."
+                )
+        elif descriptions is None:
+            descriptions = [None] * len(models)
         else:
-            if isinstance(name, list):
-                raise ValueError(
-                    "Name must be a string or None if using a single model."
-                )
-            name_list = [name]
+            raise ValueError(
+                "descriptions parameter must be a list or None if using a list of "
+                "models"
+            )
 
-        if isinstance(model_list, list):
-            if isinstance(description, list):
-                if len(description) != len(model_list):
-                    raise ValueError(
-                        "Descriptions list must be the same length as the model list."
-                    )
-                description_list = description
-            elif isinstance(description, str):
-                raise ValueError(
-                    "Description must be a list if using a list of models."
-                )
-            elif description is None:
-                description_list = [None] * len(model_list)
-        else:
-            if isinstance(name, list):
-                raise ValueError(
-                    "Description must be a string or None if using a single model."
-                )
-            description_list = [description]
+        json_schema = None
+        if output_schema:
+            # Convert BaseModel to dict if needed
+            json_schema = normalize_output_schema(output_schema)
 
-        # Convert BaseModel to dict if needed
-        if output_schema is not None:
-            if hasattr(
-                output_schema, "model_json_schema"
-            ):  # Check for pydantic Model interface
-                json_schema = output_schema.model_json_schema()
-            elif isinstance(output_schema, dict):
-                json_schema = output_schema
-            else:
-                raise ValueError(
-                    "Invalid output schema type. Must be a dictionary or a pydantic Model."
-                )
-        else:
-            json_schema = None
-
-        results = []
-        for i in range(len(model_list)):
-            res = self._run_one_batch_inference(
+        def start_job(
+            model_singleton: ModelOptions,
+            name_singleton: str | None,
+            description_singleton: str | None,
+        ):
+            return self._run_one_batch_inference(
                 data,
-                model_list[i],
+                model_singleton,
                 column,
                 output_column,
                 job_priority,
@@ -684,20 +553,21 @@ class Sutro:
                 sampling_params,
                 system_prompt,
                 dry_run,
-                stay_attached,
+                False,
                 random_seed_per_input,
                 truncate_rows,
-                name_list[i],
-                description_list[i],
+                name_singleton,
+                description_singleton,
             )
-            results.append(res)
 
-        if len(results) > 1:
-            return results
-        elif len(results) == 1:
-            return results[0]
+        job_ids = [
+            start_job(model, name, description)
+            for model, name, description in zip(
+                models, names, descriptions, strict=True
+            )
+        ]
 
-        return None
+        return job_ids
 
     def attach(self, job_id):
         """
@@ -708,15 +578,7 @@ class Sutro:
         """
 
         s = requests.Session()
-        payload = {
-            "job_id": job_id,
-        }
         pbar = None
-
-        headers = {
-            "Authorization": f"Key {self.api_key}",
-            "Content-Type": "application/json",
-        }
 
         with yaspin(
             SPINNER,
@@ -755,9 +617,9 @@ class Sutro:
         success = False
 
         try:
-            with s.get(
-                f"{self.base_url}/stream-job-progress/{job_id}",
-                headers=headers,
+            with self.do_request(
+                "GET",
+                f"/stream-job-progress/{job_id}",
                 stream=True,
             ) as streaming_response:
                 streaming_response.raise_for_status()
@@ -787,7 +649,7 @@ class Sutro:
                             if pbar is None:
                                 spinner.stop()
                                 postfix = "Input tokens processed: 0"
-                                pbar = self.fancy_tqdm(
+                                pbar = fancy_tqdm(
                                     total=total_rows,
                                     desc="Progress",
                                     style=1,
@@ -886,56 +748,36 @@ class Sutro:
         This method retrieves a list of all jobs associated with the API key.
 
         Returns:
-            list: A list of job details.
+            list: A list of job details, or None if the request fails.
         """
-        endpoint = f"{self.base_url}/list-jobs"
-        headers = {
-            "Authorization": f"Key {self.api_key}",
-            "Content-Type": "application/json",
-        }
-
         with yaspin(
             SPINNER, text=to_colored_text("Fetching jobs"), color=BASE_OUTPUT_COLOR
         ) as spinner:
-            response = requests.get(endpoint, headers=headers)
-            if response.status_code != 200:
+            try:
+                return self._list_all_jobs_for_user()
+            except requests.HTTPError as e:
                 spinner.write(
                     to_colored_text(
-                        f"Bad status code: {response.status_code}", state="fail"
+                        f"Bad status code: {e.response.status_code}", state="fail"
                     )
                 )
                 spinner.stop()
-                print(to_colored_text(response.json(), state="fail"))
-                return
-        return response.json()["jobs"]
+                print(to_colored_text(e.response.json(), state="fail"))
+                return None
 
-    def _list_jobs_helper(self):
-        """
-        Helper function to list jobs.
-        """
-        endpoint = f"{self.base_url}/list-jobs˚"
-        headers = {
-            "Authorization": f"Key {self.api_key}",
-            "Content-Type": "application/json",
-        }
-        response = requests.get(endpoint, headers=headers)
-        if response.status_code != 200:
-            return None
+    def _list_all_jobs_for_user(self):
+        response = self.do_request("GET", "list-jobs")
         return response.json()["jobs"]
 
     def _fetch_job(self, job_id):
         """
         Helper function to fetch a single job.
         """
-        endpoint = f"{self.base_url}/jobs/{job_id}"
-        headers = {
-            "Authorization": f"Key {self.api_key}",
-            "Content-Type": "application/json",
-        }
-        response = requests.get(endpoint, headers=headers)
-        if response.status_code != 200:
+        try:
+            response = self.do_request("GET", f"jobs/{job_id}")
+            return response.json().get("job")
+        except requests.HTTPError:
             return None
-        return response.json().get("job")
 
     def _get_job_cost_estimate(self, job_id: str):
         """
@@ -969,15 +811,7 @@ class Sutro:
         Raises:
             requests.HTTPError: If the API returns a non-200 status code.
         """
-        endpoint = f"{self.base_url}/job-status/{job_id}"
-        headers = {
-            "Authorization": f"Key {self.api_key}",
-            "Content-Type": "application/json",
-        }
-
-        response = requests.get(endpoint, headers=headers)
-        response.raise_for_status()
-
+        response = self.do_request("GET", f"job-status/{job_id}")
         return response.json()["job_status"][job_id]
 
     def get_job_status(self, job_id: str):
@@ -1022,7 +856,7 @@ class Sutro:
         output_column: str = "inference_result",
         disable_cache: bool = False,
         unpack_json: bool = True,
-    ):
+    ) -> pl.DataFrame | pd.DataFrame:
         """
         Get the results of a job by its ID.
 
@@ -1059,44 +893,37 @@ class Sutro:
                     to_colored_text("✔ Results loaded from cache", state="success")
                 )
         else:
-            endpoint = f"{self.base_url}/job-results"
             payload = {
                 "job_id": job_id,
                 "include_inputs": include_inputs,
                 "include_cumulative_logprobs": include_cumulative_logprobs,
-            }
-            headers = {
-                "Authorization": f"Key {self.api_key}",
-                "Content-Type": "application/json",
             }
             with yaspin(
                 SPINNER,
                 text=to_colored_text(f"Gathering results from job: {job_id}"),
                 color=BASE_OUTPUT_COLOR,
             ) as spinner:
-                response = requests.post(
-                    endpoint, data=json.dumps(payload), headers=headers
-                )
-                if response.status_code != 200:
+                try:
+                    response = self.do_request("POST", "job-results", json=payload)
+                    response_data = response.json()
+                    spinner.write(
+                        to_colored_text("✔ Job results retrieved", state="success")
+                    )
+                except requests.HTTPError as e:
                     spinner.write(
                         to_colored_text(
-                            f"Bad status code: {response.status_code}", state="fail"
+                            f"Bad status code: {e.response.status_code}", state="fail"
                         )
                     )
                     spinner.stop()
-                    print(to_colored_text(response.json(), state="fail"))
+                    print(to_colored_text(e.response.json(), state="fail"))
                     return None
 
-                spinner.write(
-                    to_colored_text("✔ Job results retrieved", state="success")
-                )
-
-            response_data = response.json()
             results_df = pl.DataFrame(response_data["results"])
 
             results_df = results_df.rename({"outputs": output_column})
 
-            if disable_cache == False:
+            if not disable_cache:
                 os.makedirs(os.path.dirname(file_path), exist_ok=True)
                 results_df.write_parquet(file_path, compression="snappy")
                 spinner.write(
@@ -1185,25 +1012,20 @@ class Sutro:
         Returns:
             dict: The status of the job.
         """
-        endpoint = f"{self.base_url}/job-cancel/{job_id}"
-        headers = {
-            "Authorization": f"Key {self.api_key}",
-            "Content-Type": "application/json",
-        }
         with yaspin(
             SPINNER,
             text=to_colored_text(f"Cancelling job: {job_id}"),
             color=BASE_OUTPUT_COLOR,
         ) as spinner:
-            response = requests.get(endpoint, headers=headers)
-            if response.status_code == 200:
+            try:
+                response = self.do_request("GET", f"job-cancel/{job_id}")
                 spinner.write(to_colored_text("✔ Job cancelled", state="success"))
-            else:
+                return response.json()
+            except requests.HTTPError as e:
                 spinner.write(to_colored_text("Failed to cancel job", state="fail"))
                 spinner.stop()
-                print(to_colored_text(response.json(), state="fail"))
-                return
-        return response.json()
+                print(to_colored_text(e.response.json(), state="fail"))
+                return None
 
     def create_dataset(self):
         """
@@ -1214,31 +1036,27 @@ class Sutro:
         Returns:
             str: The ID of the new dataset.
         """
-        endpoint = f"{self.base_url}/create-dataset"
-        headers = {
-            "Authorization": f"Key {self.api_key}",
-            "Content-Type": "application/json",
-        }
         with yaspin(
             SPINNER, text=to_colored_text("Creating dataset"), color=BASE_OUTPUT_COLOR
         ) as spinner:
-            response = requests.get(endpoint, headers=headers)
-            if response.status_code != 200:
+            try:
+                response = self.do_request("GET", "create-dataset")
+                dataset_id = response.json()["dataset_id"]
                 spinner.write(
                     to_colored_text(
-                        f"Bad status code: {response.status_code}", state="fail"
+                        f"✔ Dataset created with ID: {dataset_id}", state="success"
+                    )
+                )
+                return dataset_id
+            except requests.HTTPError as e:
+                spinner.write(
+                    to_colored_text(
+                        f"Bad status code: {e.response.status_code}", state="fail"
                     )
                 )
                 spinner.stop()
-                print(to_colored_text(response.json(), state="fail"))
-                return
-            dataset_id = response.json()["dataset_id"]
-            spinner.write(
-                to_colored_text(
-                    f"✔ Dataset created with ID: {dataset_id}", state="success"
-                )
-            )
-        return dataset_id
+                print(to_colored_text(e.response.json(), state="fail"))
+                return None
 
     def upload_to_dataset(
         self,
@@ -1269,8 +1087,6 @@ class Sutro:
 
         if dataset_id is None:
             dataset_id = self.create_dataset()
-
-        endpoint = f"{self.base_url}/upload-to-dataset"
 
         if isinstance(file_paths, str):
             # check if the file path is a directory
@@ -1304,8 +1120,6 @@ class Sutro:
                     "dataset_id": dataset_id,
                 }
 
-                headers = {"Authorization": f"Key {self.api_key}"}
-
                 count += 1
                 spinner.write(
                     to_colored_text(
@@ -1314,25 +1128,18 @@ class Sutro:
                 )
 
                 try:
-                    response = requests.post(
-                        endpoint, headers=headers, data=payload, files=files
+                    self.do_request(
+                        "POST",
+                        "/upload-to-dataset",
+                        data=payload,
+                        files=files,
+                        verify=verify_ssl,
                     )
-                    if response.status_code != 200:
-                        # Stop spinner before showing error to avoid terminal width error
-                        spinner.stop()
-                        print(
-                            to_colored_text(
-                                f"Error: HTTP {response.status_code}", state="fail"
-                            )
-                        )
-                        print(to_colored_text(response.json(), state="fail"))
-                        return
-
                 except requests.exceptions.RequestException as e:
                     # Stop spinner before showing error to avoid terminal width error
                     spinner.stop()
                     print(to_colored_text(f"Upload failed: {str(e)}", state="fail"))
-                    return
+                    return None
 
             spinner.write(
                 to_colored_text(
@@ -1342,32 +1149,23 @@ class Sutro:
         return dataset_id
 
     def list_datasets(self):
-        endpoint = f"{self.base_url}/list-datasets"
-        headers = {
-            "Authorization": f"Key {self.api_key}",
-            "Content-Type": "application/json",
-        }
         with yaspin(
             SPINNER, text=to_colored_text("Retrieving datasets"), color=BASE_OUTPUT_COLOR
         ) as spinner:
-            response = requests.post(endpoint, headers=headers)
-            if response.status_code != 200:
+            try:
+                response = self.do_request("POST", "list-datasets")
+                spinner.write(to_colored_text("✔ Datasets retrieved", state="success"))
+                return response.json()["datasets"]
+            except requests.HTTPError as e:
                 spinner.fail(
                     to_colored_text(
-                        f"Bad status code: {response.status_code}", state="fail"
+                        f"Bad status code: {e.response.status_code}", state="fail"
                     )
                 )
-                print(to_colored_text(f"Error: {response.json()}", state="fail"))
-                return
-            spinner.write(to_colored_text("✔ Datasets retrieved", state="success"))
-        return response.json()["datasets"]
+                print(to_colored_text(f"Error: {e.response.json()}", state="fail"))
+                return None
 
     def list_dataset_files(self, dataset_id: str):
-        endpoint = f"{self.base_url}/list-dataset-files"
-        headers = {
-            "Authorization": f"Key {self.api_key}",
-            "Content-Type": "application/json",
-        }
         payload = {
             "dataset_id": dataset_id,
         }
@@ -1376,23 +1174,22 @@ class Sutro:
             text=to_colored_text(f"Listing files in dataset: {dataset_id}"),
             color=BASE_OUTPUT_COLOR,
         ) as spinner:
-            response = requests.post(
-                endpoint, headers=headers, data=json.dumps(payload)
-            )
-            if response.status_code != 200:
-                spinner.fail(
+            try:
+                response = self.do_request("POST", "list-dataset-files", json=payload)
+                spinner.write(
                     to_colored_text(
-                        f"Bad status code: {response.status_code}", state="fail"
+                        f"✔ Files listed in dataset: {dataset_id}", state="success"
                     )
                 )
-                print(to_colored_text(f"Error: {response.json()}", state="fail"))
-                return
-            spinner.write(
-                to_colored_text(
-                    f"✔ Files listed in dataset: {dataset_id}", state="success"
+                return response.json()["files"]
+            except requests.HTTPError as e:
+                spinner.fail(
+                    to_colored_text(
+                        f"Bad status code: {e.response.status_code}", state="fail"
+                    )
                 )
-            )
-        return response.json()["files"]
+                print(to_colored_text(f"Error: {e.response.json()}", state="fail"))
+                return None
 
     def download_from_dataset(
         self,
@@ -1400,8 +1197,6 @@ class Sutro:
         files: Union[List[str], str] = None,
         output_path: str = None,
     ):
-        endpoint = f"{self.base_url}/download-from-dataset"
-
         if files is None:
             files = self.list_dataset_files(dataset_id)
         elif isinstance(files, str):
@@ -1426,32 +1221,32 @@ class Sutro:
         ) as spinner:
             count = 0
             for file in files:
-                headers = {
-                    "Authorization": f"Key {self.api_key}",
-                    "Content-Type": "application/json",
-                }
-                payload = {
-                    "dataset_id": dataset_id,
-                    "file_name": file,
-                }
                 spinner.text = to_colored_text(
                     f"Downloading file {count + 1}/{len(files)} from dataset: {dataset_id}"
                 )
-                response = requests.post(
-                    endpoint, headers=headers, data=json.dumps(payload)
-                )
-                if response.status_code != 200:
+
+                try:
+                    payload = {
+                        "dataset_id": dataset_id,
+                        "file_name": file,
+                    }
+                    response = self.do_request(
+                        "POST", "download-from-dataset", json=payload
+                    )
+
+                    file_content = response.content
+                    with open(os.path.join(output_path, file), "wb") as f:
+                        f.write(file_content)
+
+                    count += 1
+                except requests.HTTPError as e:
                     spinner.fail(
                         to_colored_text(
-                            f"Bad status code: {response.status_code}", state="fail"
+                            f"Bad status code: {e.response.status_code}", state="fail"
                         )
                     )
-                    print(to_colored_text(f"Error: {response.json()}", state="fail"))
+                    print(to_colored_text(f"Error: {e.response.json()}", state="fail"))
                     return
-                file_content = response.content
-                with open(os.path.join(output_path, file), "wb") as f:
-                    f.write(file_content)
-                count += 1
             spinner.write(
                 to_colored_text(
                     f"✔ {count} files successfully downloaded from dataset: {dataset_id}",
@@ -1471,54 +1266,47 @@ class Sutro:
         Returns:
             dict: The status of the authentication.
         """
-        endpoint = f"{self.base_url}/try-authentication"
-        headers = {
-            "Authorization": f"Key {api_key}",
-            "Content-Type": "application/json",
-        }
         with yaspin(
             SPINNER, text=to_colored_text("Checking API key"), color=BASE_OUTPUT_COLOR
         ) as spinner:
-            response = requests.get(endpoint, headers=headers)
-            if response.status_code == 200:
+            try:
+                response = self.do_request("GET", "try-authentication", api_key)
+
                 spinner.write(to_colored_text("✔"))
-            else:
+                return response.json()
+            except requests.HTTPError as e:
                 spinner.write(
                     to_colored_text(
-                        f"API key failed to authenticate: {response.status_code}",
+                        f"API key failed to authenticate: {e.response.status_code}",
                         state="fail",
                     )
                 )
-                return
-        return response.json()
+                return None
 
     def get_quotas(self):
-        endpoint = f"{self.base_url}/get-quotas"
-        headers = {
-            "Authorization": f"Key {self.api_key}",
-            "Content-Type": "application/json",
-        }
         with yaspin(
             SPINNER, text=to_colored_text("Fetching quotas"), color=BASE_OUTPUT_COLOR
         ) as spinner:
-            response = requests.get(endpoint, headers=headers)
-            if response.status_code != 200:
+            try:
+                response = self.do_request("GET", "get-quotas")
+                return response.json()["quotas"]
+            except requests.HTTPError as e:
                 spinner.fail(
                     to_colored_text(
-                        f"Bad status code: {response.status_code}", state="fail"
+                        f"Bad status code: {e.response.status_code}", state="fail"
                     )
                 )
-                print(to_colored_text(f"Error: {response.json()}", state="fail"))
-                return
-        return response.json()["quotas"]
+                print(to_colored_text(f"Error: {e.response.json()}", state="fail"))
+                return None
 
     def await_job_completion(
         self,
         job_id: str,
         timeout: Optional[int] = 7200,
         obtain_results: bool = True,
+        output_column: str = "inference_result",
         is_cost_estimate: bool = False,
-    ) -> list | None:
+    ) -> pl.DataFrame | None:
         """
         Waits for job completion to occur and then returns the results upon
         a successful completion.
@@ -1534,7 +1322,7 @@ class Sutro:
         """
         POLL_INTERVAL = 5
 
-        results = None
+        results: pl.DataFrame | None = None
         start_time = time.time()
         with yaspin(
             SPINNER, text=to_colored_text("Awaiting job completion"), color=BASE_OUTPUT_COLOR
@@ -1571,7 +1359,9 @@ class Sutro:
                                 "Job completed! Retrieving results...", "success"
                             )
                         )
-                        results = self.get_job_results(job_id)
+                        results = self.get_job_results(
+                            job_id, output_column=output_column
+                        )
                     break
                 if status == JobStatus.FAILED:
                     spinner.write(to_colored_text("Job has failed", "fail"))
