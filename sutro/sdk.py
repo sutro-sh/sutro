@@ -359,7 +359,6 @@ class Sutro:
                 response = requests.post(
                     endpoint, data=json.dumps(payload), headers=headers
                 )
-                time.sleep(10)
                 response_data = response.json()
                 if response.status_code != 200:
                     spinner.write(
