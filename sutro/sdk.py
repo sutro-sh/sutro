@@ -54,8 +54,9 @@ def is_jupyter() -> bool:
     return not sys.stdout.isatty()
 
 
-# `color` param not supported in Jupyter notebooks
-YASPIN_COLOR = None if is_jupyter() else "blue"
+# Adding color to text is not supported in Jupyter notebooks and breaks
+# things
+BASE_OUTPUT_COLOR = None if is_jupyter() else "blue"
 SPINNER = Spinners.dots14
 
 # Models available for inference.  Keep in sync with the backend configuration
@@ -354,7 +355,7 @@ class Sutro:
         spinner_text = to_colored_text(t)
 
         try:
-            with yaspin(SPINNER, text=spinner_text, color=YASPIN_COLOR) as spinner:
+            with yaspin(SPINNER, text=spinner_text, color=BASE_OUTPUT_COLOR) as spinner:
                 response = requests.post(
                     endpoint, data=json.dumps(payload), headers=headers
                 )
@@ -444,7 +445,7 @@ class Sutro:
                     spinner = yaspin(
                         SPINNER,
                         text=to_colored_text("Awaiting status updates..."),
-                        color=YASPIN_COLOR,
+                        color=BASE_OUTPUT_COLOR,
                     )
                     spinner.start()
 
@@ -721,7 +722,7 @@ class Sutro:
         with yaspin(
             SPINNER,
             text=to_colored_text("Looking for job..."),
-            color=YASPIN_COLOR,
+            color=BASE_OUTPUT_COLOR,
         ) as spinner:
             # Fetch the specific job we want to attach to
             job = self._fetch_job(job_id)
@@ -764,7 +765,7 @@ class Sutro:
                 spinner = yaspin(
                     SPINNER,
                     text=to_colored_text("Awaiting status updates..."),
-                    color=YASPIN_COLOR,
+                    color=BASE_OUTPUT_COLOR,
                 )
                 clickable_link = make_clickable_link(
                     f"https://app.sutro.sh/jobs/{job_id}"
@@ -824,7 +825,7 @@ class Sutro:
         self,
         total: int,
         desc: str = "Progress",
-        color: str = "blue",
+        color: str = BASE_OUTPUT_COLOR,
         style=1,
         postfix: str = None,
     ):
@@ -895,7 +896,7 @@ class Sutro:
         }
 
         with yaspin(
-            SPINNER, text=to_colored_text("Fetching jobs"), color=YASPIN_COLOR
+            SPINNER, text=to_colored_text("Fetching jobs"), color=BASE_OUTPUT_COLOR
         ) as spinner:
             response = requests.get(endpoint, headers=headers)
             if response.status_code != 200:
@@ -995,7 +996,7 @@ class Sutro:
         with yaspin(
             SPINNER,
             text=to_colored_text(f"Checking job status with ID: {job_id}"),
-            color=YASPIN_COLOR,
+            color=BASE_OUTPUT_COLOR,
         ) as spinner:
             try:
                 response_data = self._fetch_job_status(job_id)
@@ -1052,7 +1053,7 @@ class Sutro:
             with yaspin(
                 SPINNER,
                 text=to_colored_text(f"Loading results from cache: {file_path}"),
-                color=YASPIN_COLOR,
+                color=BASE_OUTPUT_COLOR,
             ) as spinner:
                 results_df = pl.read_parquet(file_path)
                 spinner.write(
@@ -1072,7 +1073,7 @@ class Sutro:
             with yaspin(
                 SPINNER,
                 text=to_colored_text(f"Gathering results from job: {job_id}"),
-                color=YASPIN_COLOR,
+                color=BASE_OUTPUT_COLOR,
             ) as spinner:
                 response = requests.post(
                     endpoint, data=json.dumps(payload), headers=headers
@@ -1193,7 +1194,7 @@ class Sutro:
         with yaspin(
             SPINNER,
             text=to_colored_text(f"Cancelling job: {job_id}"),
-            color=YASPIN_COLOR,
+            color=BASE_OUTPUT_COLOR,
         ) as spinner:
             response = requests.get(endpoint, headers=headers)
             if response.status_code == 200:
@@ -1220,7 +1221,7 @@ class Sutro:
             "Content-Type": "application/json",
         }
         with yaspin(
-            SPINNER, text=to_colored_text("Creating dataset"), color=YASPIN_COLOR
+            SPINNER, text=to_colored_text("Creating dataset"), color=BASE_OUTPUT_COLOR
         ) as spinner:
             response = requests.get(endpoint, headers=headers)
             if response.status_code != 200:
@@ -1286,7 +1287,7 @@ class Sutro:
         with yaspin(
             SPINNER,
             text=to_colored_text(f"Uploading files to dataset: {dataset_id}"),
-            color=YASPIN_COLOR,
+            color=BASE_OUTPUT_COLOR,
         ) as spinner:
             count = 0
             for file_path in file_paths:
@@ -1348,7 +1349,7 @@ class Sutro:
             "Content-Type": "application/json",
         }
         with yaspin(
-            SPINNER, text=to_colored_text("Retrieving datasets"), color=YASPIN_COLOR
+            SPINNER, text=to_colored_text("Retrieving datasets"), color=BASE_OUTPUT_COLOR
         ) as spinner:
             response = requests.post(endpoint, headers=headers)
             if response.status_code != 200:
@@ -1374,7 +1375,7 @@ class Sutro:
         with yaspin(
             SPINNER,
             text=to_colored_text(f"Listing files in dataset: {dataset_id}"),
-            color=YASPIN_COLOR,
+            color=BASE_OUTPUT_COLOR,
         ) as spinner:
             response = requests.post(
                 endpoint, headers=headers, data=json.dumps(payload)
@@ -1422,7 +1423,7 @@ class Sutro:
         with yaspin(
             SPINNER,
             text=to_colored_text(f"Downloading files from dataset: {dataset_id}"),
-            color=YASPIN_COLOR,
+            color=BASE_OUTPUT_COLOR,
         ) as spinner:
             count = 0
             for file in files:
@@ -1477,7 +1478,7 @@ class Sutro:
             "Content-Type": "application/json",
         }
         with yaspin(
-            SPINNER, text=to_colored_text("Checking API key"), color=YASPIN_COLOR
+            SPINNER, text=to_colored_text("Checking API key"), color=BASE_OUTPUT_COLOR
         ) as spinner:
             response = requests.get(endpoint, headers=headers)
             if response.status_code == 200:
@@ -1499,7 +1500,7 @@ class Sutro:
             "Content-Type": "application/json",
         }
         with yaspin(
-            SPINNER, text=to_colored_text("Fetching quotas"), color=YASPIN_COLOR
+            SPINNER, text=to_colored_text("Fetching quotas"), color=BASE_OUTPUT_COLOR
         ) as spinner:
             response = requests.get(endpoint, headers=headers)
             if response.status_code != 200:
@@ -1537,7 +1538,7 @@ class Sutro:
         results = None
         start_time = time.time()
         with yaspin(
-            SPINNER, text=to_colored_text("Awaiting job completion"), color=YASPIN_COLOR
+            SPINNER, text=to_colored_text("Awaiting job completion"), color=BASE_OUTPUT_COLOR
         ) as spinner:
             if not is_cost_estimate:
                 clickable_link = make_clickable_link(
@@ -1599,7 +1600,7 @@ class Sutro:
         with yaspin(
             SPINNER,
             text=to_colored_text("Retrieving job results cache contents"),
-            color=YASPIN_COLOR,
+            color=BASE_OUTPUT_COLOR,
         ) as spinner:
             if not os.path.exists(os.path.expanduser("~/.sutro/job-results")):
                 spinner.write(to_colored_text("No job results cache found", "success"))
@@ -1631,7 +1632,7 @@ class Sutro:
 
         start_time = time.time()
         with yaspin(
-            SPINNER, text=to_colored_text("Awaiting job completion"), color=YASPIN_COLOR
+            SPINNER, text=to_colored_text("Awaiting job completion"), color=BASE_OUTPUT_COLOR
         ) as spinner:
             while (time.time() - start_time) < timeout:
                 try:
