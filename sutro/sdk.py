@@ -23,6 +23,7 @@ from sutro.interfaces import JobStatus
 from sutro.templates.classification import ClassificationTemplates
 from sutro.templates.embed import EmbeddingTemplates
 from sutro.templates.evals import EvalTemplates
+from sutro.templates.structured_extraction import StructuredExtractionTemplates
 from sutro.validation import check_version, check_for_api_key
 
 JOB_NAME_CHAR_LIMIT = 45
@@ -54,7 +55,27 @@ def make_clickable_link(url, text=None):
     return f"\033]8;;{url}\033\\{text}\033]8;;\033\\"
 
 
-class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
+def maybe_print_failure_reason(job, spinner):
+    failure_reason = job.get("failure_reason")
+    if failure_reason:
+        spinner.write(
+            to_colored_text(f"Failure reason: {failure_reason['message']}", "fail")
+        )
+        if failure_reason.get("additional_context"):
+            spinner.write(
+                to_colored_text(
+                    f"Additional context: {failure_reason.get('additional_context')}",
+                    "fail",
+                )
+            )
+
+
+class Sutro(
+    EmbeddingTemplates,
+    ClassificationTemplates,
+    EvalTemplates,
+    StructuredExtractionTemplates,
+):
     def __init__(self, api_key: str = None, base_url: str = "https://api.sutro.sh/"):
         self.api_key = api_key or check_for_api_key()
         self.base_url = base_url
@@ -249,12 +270,8 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
             )
             started = self._await_job_start(job_id)
             if not started:
-                failure_reason = self._get_failure_reason(job_id)
-                spinner.write(
-                    to_colored_text(
-                        f"Failure reason: {failure_reason['message']}", "fail"
-                    )
-                )
+                job = self._fetch_job(job_id)
+                maybe_print_failure_reason(job, spinner)
                 return None
 
             pbar = None
@@ -724,15 +741,6 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
             return None
 
         return job.get("cost_estimate")
-
-    def _get_failure_reason(self, job_id: str):
-        """
-        Get the failure reason for a job.
-        """
-        job = self._fetch_job(job_id)
-        if not job:
-            return None
-        return job.get("failure_reason")
 
     def _fetch_job_status(self, job_id: str):
         """
@@ -1301,6 +1309,10 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
                     break
                 if status == JobStatus.FAILED:
                     spinner.write(to_colored_text("Job has failed", "fail"))
+
+                    job = self._fetch_job(job_id)
+                    maybe_print_failure_reason(job, spinner)
+
                     return None
                 if status == JobStatus.CANCELLED:
                     spinner.write(to_colored_text("Job has been cancelled"))
