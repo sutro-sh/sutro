@@ -19,6 +19,7 @@ import importlib.metadata
 JOB_NAME_CHAR_LIMIT = 45
 JOB_DESCRIPTION_CHAR_LIMIT = 512
 
+
 class JobStatus(str, Enum):
     """Job statuses that will be returned by the API & SDK"""
 
@@ -99,6 +100,11 @@ def to_colored_text(
     Returns:
         str: Text with appropriate color applied
     """
+    # Adding a color to the text breaks the spinner and makes it so
+    # stale/previous text doesn't get flushed
+    if is_jupyter:
+        return text
+
     match state:
         case "success":
             return f"{Fore.GREEN}{text}{Style.RESET_ALL}"
@@ -118,6 +124,10 @@ def make_clickable_link(url, text=None):
     Create a clickable link for terminals that support OSC 8 hyperlinks.
     Falls back to plain text for terminals that don't support it.
     """
+    # Don't need to add the special chars for jupyter notebook
+    if is_jupyter():
+        return url
+
     if text is None:
         text = url
     return f"\033]8;;{url}\033\\{text}\033]8;;\033\\"
@@ -144,15 +154,13 @@ class Sutro:
             latest_version = resp.json()["info"]["version"]
 
             if local_version != latest_version:
-                msg = (f"⚠️  You are using {package_name} {local_version}, "
+                msg = (
+                    f"⚠️  You are using {package_name} {local_version}, "
                     f"but the latest release is {latest_version}. "
-                    f"Run `[uv] pip install -U {package_name}` to upgrade.")
-                print(to_colored_text(
-                        msg,
-                        state="callout"
-                    )
+                    f"Run `[uv] pip install -U {package_name}` to upgrade."
                 )
-        except Exception as e:
+                print(to_colored_text(msg, state="callout"))
+        except Exception:
             # Fail silently or log, you don’t want this blocking usage
             pass
 
@@ -197,7 +205,9 @@ class Sutro:
         """
         self.api_key = api_key
 
-    def do_dataframe_column_concatenation(self, data: Union[pd.DataFrame, pl.DataFrame], column: Union[str, List[str]]):
+    def do_dataframe_column_concatenation(
+        self, data: Union[pd.DataFrame, pl.DataFrame], column: Union[str, List[str]]
+    ):
         """
         If the user has supplied a dataframe and a list of columns, this will intelligenly concatenate the columns into a single column, accepting separator strings.
         """
@@ -225,7 +235,11 @@ class Sutro:
                     else:
                         exprs.append(pl.lit(p))
 
-                result = data.select(pl.concat_str(exprs, separator="", ignore_nulls=False).alias("concat"))
+                result = data.select(
+                    pl.concat_str(exprs, separator="", ignore_nulls=False).alias(
+                        "concat"
+                    )
+                )
                 return result["concat"].to_list()
         except Exception as e:
             raise ValueError(f"Error handling column concatentation: {e}")
@@ -301,9 +315,13 @@ class Sutro:
     ):
         # Validate name and description lengths
         if name is not None and len(name) > JOB_NAME_CHAR_LIMIT:
-            raise ValueError(f"Job name cannot exceed {JOB_NAME_CHAR_LIMIT} characters.")
+            raise ValueError(
+                f"Job name cannot exceed {JOB_NAME_CHAR_LIMIT} characters."
+            )
         if description is not None and len(description) > JOB_DESCRIPTION_CHAR_LIMIT:
-            raise ValueError(f"Job description cannot exceed {JOB_DESCRIPTION_CHAR_LIMIT} characters.")
+            raise ValueError(
+                f"Job description cannot exceed {JOB_DESCRIPTION_CHAR_LIMIT} characters."
+            )
 
         input_data = self.handle_data_helper(data, column)
         endpoint = f"{self.base_url}/batch-inference"
@@ -334,11 +352,13 @@ class Sutro:
         job_id = None
         t = f"Creating {'[cost estimate] ' if cost_estimate else ''}priority {job_priority} job"
         spinner_text = to_colored_text(t)
+
         try:
             with yaspin(SPINNER, text=spinner_text, color=YASPIN_COLOR) as spinner:
                 response = requests.post(
                     endpoint, data=json.dumps(payload), headers=headers
                 )
+                time.sleep(10)
                 response_data = response.json()
                 if response.status_code != 200:
                     spinner.write(
@@ -535,11 +555,11 @@ class Sutro:
                 else:
                     print(results)
                     spinner.write(
-                    to_colored_text(
-                        f"✔ Job results received. You can re-obtain the results with `so.get_job_results('{job_id}')`",
-                        state="success",
+                        to_colored_text(
+                            f"✔ Job results received. You can re-obtain the results with `so.get_job_results('{job_id}')`",
+                            state="success",
+                        )
                     )
-                )
                 spinner.stop()
 
                 return job_id
@@ -602,7 +622,9 @@ class Sutro:
         if isinstance(model_list, list):
             if isinstance(name, list):
                 if len(name) != len(model_list):
-                    raise ValueError("Name list must be the same length as the model list.")
+                    raise ValueError(
+                        "Name list must be the same length as the model list."
+                    )
                 name_list = name
             elif isinstance(name, str):
                 raise ValueError("Name must be a list if using a list of models.")
@@ -610,21 +632,29 @@ class Sutro:
                 name_list = [None] * len(model_list)
         else:
             if isinstance(name, list):
-                raise ValueError("Name must be a string or None if using a single model.")
+                raise ValueError(
+                    "Name must be a string or None if using a single model."
+                )
             name_list = [name]
 
         if isinstance(model_list, list):
             if isinstance(description, list):
                 if len(description) != len(model_list):
-                    raise ValueError("Descriptions list must be the same length as the model list.")
+                    raise ValueError(
+                        "Descriptions list must be the same length as the model list."
+                    )
                 description_list = description
             elif isinstance(description, str):
-                raise ValueError("Description must be a list if using a list of models.")
+                raise ValueError(
+                    "Description must be a list if using a list of models."
+                )
             elif description is None:
                 description_list = [None] * len(model_list)
         else:
             if isinstance(name, list):
-                raise ValueError("Description must be a string or None if using a single model.")
+                raise ValueError(
+                    "Description must be a string or None if using a single model."
+                )
             description_list = [description]
 
         # Convert BaseModel to dict if needed
@@ -641,7 +671,7 @@ class Sutro:
                 )
         else:
             json_schema = None
-        
+
         results = []
         for i in range(len(model_list)):
             res = self._run_one_batch_inference(
@@ -1093,10 +1123,11 @@ class Sutro:
                 first_row = json.loads(
                     results_df.head(1)[output_column][0]
                 )  # checks if the first row can be json decoded
-                results_df = results_df.map_columns(output_column, lambda s: s.str.json_decode())
+                results_df = results_df.map_columns(
+                    output_column, lambda s: s.str.json_decode()
+                )
                 results_df = results_df.with_columns(
-                    pl.col(output_column)
-                    .alias("output_column_json_decoded")
+                    pl.col(output_column).alias("output_column_json_decoded")
                 )
                 json_decoded_fields = first_row.keys()
                 for field in json_decoded_fields:
@@ -1105,19 +1136,20 @@ class Sutro:
                         .struct.field(field)
                         .alias(field)
                     )
-                if sorted(list(set(json_decoded_fields))) == ['content', 'reasoning_content']: # if it's a reasoning model, we need to unpack the content field
-                    content_keys = results_df.head(1)['content'][0].keys()
+                if sorted(list(set(json_decoded_fields))) == [
+                    "content",
+                    "reasoning_content",
+                ]:  # if it's a reasoning model, we need to unpack the content field
+                    content_keys = results_df.head(1)["content"][0].keys()
                     for key in content_keys:
                         results_df = results_df.with_columns(
-                            pl.col("content")
-                            .struct.field(key)
-                            .alias(key)
+                            pl.col("content").struct.field(key).alias(key)
                         )
                     results_df = results_df.drop("content")
                 results_df = results_df.drop(
                     [output_column, "output_column_json_decoded"]
                 )
-            except Exception as e:
+            except Exception:
                 # if the first row cannot be json decoded, do nothing
                 pass
 
