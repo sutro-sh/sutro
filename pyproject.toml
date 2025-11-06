@@ -9,7 +9,7 @@ installer = "uv"
 
 [project]
 name = "sutro"
-version = "0.1.39"
+version = "0.1.40"
 description = "Sutro Python SDK"
 readme = "README.md"
 requires-python = ">=3.10"
