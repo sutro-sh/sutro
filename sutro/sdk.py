@@ -37,8 +37,9 @@ def is_jupyter() -> bool:
     return not sys.stdout.isatty()
 
 
-# `color` param not supported in Jupyter notebooks
-YASPIN_COLOR = None if is_jupyter() else "blue"
+# Adding color to text is not supported in Jupyter notebooks and breaks
+# things
+BASE_OUTPUT_COLOR = None if is_jupyter() else "blue"
 SPINNER = Spinners.dots14
 
 
@@ -49,6 +50,10 @@ def make_clickable_link(url, text=None):
     Create a clickable link for terminals that support OSC 8 hyperlinks.
     Falls back to plain text for terminals that don't support it.
     """
+    # Don't need to add the special chars for jupyter notebook
+    if is_jupyter():
+        return url
+
     if text is None:
         text = url
     return f"\033]8;;{url}\033\\{text}\033]8;;\033\\"
@@ -175,15 +180,15 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
         job_id = None
         t = f"Creating {'[cost estimate] ' if cost_estimate else ''}priority {job_priority} job"
         spinner_text = to_colored_text(t)
+
         try:
-            with yaspin(SPINNER, text=spinner_text, color=YASPIN_COLOR) as spinner:
+            with yaspin(SPINNER, text=spinner_text, color=BASE_OUTPUT_COLOR) as spinner:
                 try:
                     response = self.do_request("POST", "batch-inference", json=payload)
                     response_data = response.json()
                 except requests.HTTPError as e:
                     response = e.response
                     response_data = response.json()
-
                 if response.status_code != 200:
                     spinner.write(
                         to_colored_text(f"Error: {response.status_code}", state="fail")
@@ -269,7 +274,7 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
                     spinner = yaspin(
                         SPINNER,
                         text=to_colored_text("Awaiting status updates..."),
-                        color=YASPIN_COLOR,
+                        color=BASE_OUTPUT_COLOR,
                     )
                     spinner.start()
 
@@ -578,7 +583,7 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
         with yaspin(
             SPINNER,
             text=to_colored_text("Looking for job..."),
-            color=YASPIN_COLOR,
+            color=BASE_OUTPUT_COLOR,
         ) as spinner:
             # Fetch the specific job we want to attach to
             job = self._fetch_job(job_id)
@@ -621,7 +626,7 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
                 spinner = yaspin(
                     SPINNER,
                     text=to_colored_text("Awaiting status updates..."),
-                    color=YASPIN_COLOR,
+                    color=BASE_OUTPUT_COLOR,
                 )
                 clickable_link = make_clickable_link(
                     f"https://app.sutro.sh/jobs/{job_id}"
@@ -677,6 +682,65 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
             if spinner:
                 spinner.stop()
 
+    def fancy_tqdm(
+        self,
+        total: int,
+        desc: str = "Progress",
+        color: str = BASE_OUTPUT_COLOR,
+        style=1,
+        postfix: str = None,
+    ):
+        """
+        Creates a customized tqdm progress bar with different styling options.
+
+        Args:
+            total (int): Total iterations
+            desc (str): Description for the progress bar
+            color (str): Color of the progress bar (green, blue, red, yellow, magenta)
+            style (int): Style preset (1-4)
+            postfix (str): Postfix for the progress bar
+        """
+
+        # Style presets
+        style_presets = {
+            1: {
+                "bar_format": "{l_bar}{bar:30}| {n_fmt}/{total_fmt} | {percentage:3.0f}% {postfix}",
+                "ascii": "░▒█",
+            },
+            2: {
+                "bar_format": "╢{l_bar}{bar:30}╟ {percentage:3.0f}%",
+                "ascii": "▁▂▃▄▅▆▇█",
+            },
+            3: {
+                "bar_format": "{desc}: |{bar}| {percentage:3.0f}% [{elapsed}<{remaining}]",
+                "ascii": "◯◔◑◕●",
+            },
+            4: {
+                "bar_format": "⏳ {desc} {percentage:3.0f}% |{bar}| {n_fmt}/{total_fmt}",
+                "ascii": "⬜⬛",
+            },
+            5: {
+                "bar_format": "⏳ {desc} {percentage:3.0f}% |{bar}| {n_fmt}/{total_fmt}",
+                "ascii": "▏▎▍▌▋▊▉█",
+            },
+        }
+
+        # Get style configuration
+        style_config = style_presets.get(style, style_presets[1])
+
+        return tqdm(
+            total=total,
+            desc=desc,
+            colour=color,
+            bar_format=style_config["bar_format"],
+            ascii=style_config["ascii"],
+            ncols=80,
+            dynamic_ncols=True,
+            smoothing=0.3,
+            leave=True,
+            postfix=postfix,
+        )
+
     def list_jobs(self):
         """
         List all jobs.
@@ -687,7 +751,7 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
             list: A list of job details, or None if the request fails.
         """
         with yaspin(
-            SPINNER, text=to_colored_text("Fetching jobs"), color=YASPIN_COLOR
+            SPINNER, text=to_colored_text("Fetching jobs"), color=BASE_OUTPUT_COLOR
         ) as spinner:
             try:
                 return self._list_all_jobs_for_user()
@@ -765,7 +829,7 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
         with yaspin(
             SPINNER,
             text=to_colored_text(f"Checking job status with ID: {job_id}"),
-            color=YASPIN_COLOR,
+            color=BASE_OUTPUT_COLOR,
         ) as spinner:
             try:
                 response_data = self._fetch_job_status(job_id)
@@ -822,7 +886,7 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
             with yaspin(
                 SPINNER,
                 text=to_colored_text(f"Loading results from cache: {file_path}"),
-                color=YASPIN_COLOR,
+                color=BASE_OUTPUT_COLOR,
             ) as spinner:
                 results_df = pl.read_parquet(file_path)
                 spinner.write(
@@ -837,7 +901,7 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
             with yaspin(
                 SPINNER,
                 text=to_colored_text(f"Gathering results from job: {job_id}"),
-                color=YASPIN_COLOR,
+                color=BASE_OUTPUT_COLOR,
             ) as spinner:
                 try:
                     response = self.do_request("POST", "job-results", json=payload)
@@ -951,7 +1015,7 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
         with yaspin(
             SPINNER,
             text=to_colored_text(f"Cancelling job: {job_id}"),
-            color=YASPIN_COLOR,
+            color=BASE_OUTPUT_COLOR,
         ) as spinner:
             try:
                 response = self.do_request("GET", f"job-cancel/{job_id}")
@@ -973,7 +1037,7 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
             str: The ID of the new dataset.
         """
         with yaspin(
-            SPINNER, text=to_colored_text("Creating dataset"), color=YASPIN_COLOR
+            SPINNER, text=to_colored_text("Creating dataset"), color=BASE_OUTPUT_COLOR
         ) as spinner:
             try:
                 response = self.do_request("GET", "create-dataset")
@@ -1038,7 +1102,7 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
         with yaspin(
             SPINNER,
             text=to_colored_text(f"Uploading files to dataset: {dataset_id}"),
-            color=YASPIN_COLOR,
+            color=BASE_OUTPUT_COLOR,
         ) as spinner:
             count = 0
             for file_path in file_paths:
@@ -1086,7 +1150,7 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
 
     def list_datasets(self):
         with yaspin(
-            SPINNER, text=to_colored_text("Retrieving datasets"), color=YASPIN_COLOR
+            SPINNER, text=to_colored_text("Retrieving datasets"), color=BASE_OUTPUT_COLOR
         ) as spinner:
             try:
                 response = self.do_request("POST", "list-datasets")
@@ -1108,7 +1172,7 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
         with yaspin(
             SPINNER,
             text=to_colored_text(f"Listing files in dataset: {dataset_id}"),
-            color=YASPIN_COLOR,
+            color=BASE_OUTPUT_COLOR,
         ) as spinner:
             try:
                 response = self.do_request("POST", "list-dataset-files", json=payload)
@@ -1153,7 +1217,7 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
         with yaspin(
             SPINNER,
             text=to_colored_text(f"Downloading files from dataset: {dataset_id}"),
-            color=YASPIN_COLOR,
+            color=BASE_OUTPUT_COLOR,
         ) as spinner:
             count = 0
             for file in files:
@@ -1203,7 +1267,7 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
             dict: The status of the authentication.
         """
         with yaspin(
-            SPINNER, text=to_colored_text("Checking API key"), color=YASPIN_COLOR
+            SPINNER, text=to_colored_text("Checking API key"), color=BASE_OUTPUT_COLOR
         ) as spinner:
             try:
                 response = self.do_request("GET", "try-authentication", api_key)
@@ -1221,7 +1285,7 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
 
     def get_quotas(self):
         with yaspin(
-            SPINNER, text=to_colored_text("Fetching quotas"), color=YASPIN_COLOR
+            SPINNER, text=to_colored_text("Fetching quotas"), color=BASE_OUTPUT_COLOR
         ) as spinner:
             try:
                 response = self.do_request("GET", "get-quotas")
@@ -1261,7 +1325,7 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
         results: pl.DataFrame | None = None
         start_time = time.time()
         with yaspin(
-            SPINNER, text=to_colored_text("Awaiting job completion"), color=YASPIN_COLOR
+            SPINNER, text=to_colored_text("Awaiting job completion"), color=BASE_OUTPUT_COLOR
         ) as spinner:
             if not is_cost_estimate:
                 clickable_link = make_clickable_link(
@@ -1325,7 +1389,7 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
         with yaspin(
             SPINNER,
             text=to_colored_text("Retrieving job results cache contents"),
-            color=YASPIN_COLOR,
+            color=BASE_OUTPUT_COLOR,
         ) as spinner:
             if not os.path.exists(os.path.expanduser("~/.sutro/job-results")):
                 spinner.write(to_colored_text("No job results cache found", "success"))
@@ -1357,7 +1421,7 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
 
         start_time = time.time()
         with yaspin(
-            SPINNER, text=to_colored_text("Awaiting job completion"), color=YASPIN_COLOR
+            SPINNER, text=to_colored_text("Awaiting job completion"), color=BASE_OUTPUT_COLOR
         ) as spinner:
             while (time.time() - start_time) < timeout:
                 try:
