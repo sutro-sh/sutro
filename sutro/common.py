@@ -151,6 +151,7 @@ def to_colored_text(
     Returns:
         str: Text with appropriate color applied
     """
+    # If we add color styles to the text like below, it breaks outputting in Jupyter
     if is_jupyter():
         return text
 
