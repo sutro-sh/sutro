@@ -1,4 +1,5 @@
 import os
+import sys
 from typing import Union, List, Literal, Dict, Any, Type, Optional
 
 import pandas as pd
@@ -6,8 +7,6 @@ import polars as pl
 from colorama import Fore, Style
 from pydantic import BaseModel
 from tqdm import tqdm
-
-from sutro.sdk import is_jupyter, BASE_OUTPUT_COLOR
 
 EmbeddingModelOptions = Literal[
     "qwen-3-embedding-0.6b",
@@ -41,6 +40,30 @@ ModelOptions = Literal[
     "qwen-3-embedding-6b",
     "qwen-3-embedding-8b",
 ]
+
+
+# This is how yaspin defines is_jupyter logic
+def is_jupyter() -> bool:
+    return not sys.stdout.isatty()
+
+
+def make_clickable_link(url, text=None):
+    """
+    Create a clickable link for terminals that support OSC 8 hyperlinks.
+    Falls back to plain text for terminals that don't support it.
+    """
+    # Don't need to add the special chars for jupyter notebook
+    if is_jupyter():
+        return url
+
+    if text is None:
+        text = url
+    return f"\033]8;;{url}\033\\{text}\033]8;;\033\\"
+
+
+# Adding color to text is not supported in Jupyter notebooks and breaks
+# things
+BASE_OUTPUT_COLOR = None if is_jupyter() else "blue"
 
 
 def do_dataframe_column_concatenation(

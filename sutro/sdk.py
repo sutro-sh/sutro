@@ -4,7 +4,6 @@ import polars as pl
 import json
 from typing import Union, List, Optional, Dict, Any, Type
 import os
-import sys
 from yaspin import yaspin
 from yaspin.spinners import Spinners
 from colorama import init
@@ -18,6 +17,8 @@ from sutro.common import (
     normalize_output_schema,
     to_colored_text,
     fancy_tqdm,
+    make_clickable_link,
+    BASE_OUTPUT_COLOR,
 )
 from sutro.interfaces import JobStatus
 from sutro.templates.classification import ClassificationTemplates
@@ -32,31 +33,11 @@ JOB_DESCRIPTION_CHAR_LIMIT = 512
 init()
 
 
-# This is how yaspin defines is_jupyter logic
-def is_jupyter() -> bool:
-    return not sys.stdout.isatty()
-
-
-# Adding color to text is not supported in Jupyter notebooks and breaks
-# things
-BASE_OUTPUT_COLOR = None if is_jupyter() else "blue"
 SPINNER = Spinners.dots14
 
 
 # Isn't fully support in all terminals unfortunately. We should switch to Rich
 # at some point, but even Rich links aren't clickable on MacOS Terminal
-def make_clickable_link(url, text=None):
-    """
-    Create a clickable link for terminals that support OSC 8 hyperlinks.
-    Falls back to plain text for terminals that don't support it.
-    """
-    # Don't need to add the special chars for jupyter notebook
-    if is_jupyter():
-        return url
-
-    if text is None:
-        text = url
-    return f"\033]8;;{url}\033\\{text}\033]8;;\033\\"
 
 
 class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
@@ -1150,7 +1131,9 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
 
     def list_datasets(self):
         with yaspin(
-            SPINNER, text=to_colored_text("Retrieving datasets"), color=BASE_OUTPUT_COLOR
+            SPINNER,
+            text=to_colored_text("Retrieving datasets"),
+            color=BASE_OUTPUT_COLOR,
         ) as spinner:
             try:
                 response = self.do_request("POST", "list-datasets")
@@ -1325,7 +1308,9 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
         results: pl.DataFrame | None = None
         start_time = time.time()
         with yaspin(
-            SPINNER, text=to_colored_text("Awaiting job completion"), color=BASE_OUTPUT_COLOR
+            SPINNER,
+            text=to_colored_text("Awaiting job completion"),
+            color=BASE_OUTPUT_COLOR,
         ) as spinner:
             if not is_cost_estimate:
                 clickable_link = make_clickable_link(
@@ -1421,7 +1406,9 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
 
         start_time = time.time()
         with yaspin(
-            SPINNER, text=to_colored_text("Awaiting job completion"), color=BASE_OUTPUT_COLOR
+            SPINNER,
+            text=to_colored_text("Awaiting job completion"),
+            color=BASE_OUTPUT_COLOR,
         ) as spinner:
             while (time.time() - start_time) < timeout:
                 try:
