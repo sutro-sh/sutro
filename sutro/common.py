@@ -7,6 +7,8 @@ from colorama import Fore, Style
 from pydantic import BaseModel
 from tqdm import tqdm
 
+from sutro.sdk import is_jupyter, BASE_OUTPUT_COLOR
+
 EmbeddingModelOptions = Literal[
     "qwen-3-embedding-0.6b",
     "qwen-3-embedding-6b",
@@ -149,6 +151,10 @@ def to_colored_text(
     Returns:
         str: Text with appropriate color applied
     """
+    # If we add color styles to the text like below, it breaks outputting in Jupyter
+    if is_jupyter():
+        return text
+
     match state:
         case "success":
             return f"{Fore.GREEN}{text}{Style.RESET_ALL}"
@@ -164,7 +170,7 @@ def to_colored_text(
 def fancy_tqdm(
     total: int,
     desc: str = "Progress",
-    color: str = "blue",
+    color: str = BASE_OUTPUT_COLOR,
     style=1,
     postfix: str = None,
 ):
