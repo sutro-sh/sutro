@@ -97,7 +97,7 @@ def do_dataframe_column_concatenation(
                     exprs.append(pl.lit(p))
 
             result = data.select(
-                pl.concat_str(exprs, separator="", ignore_nulls=False).alias("concat")
+                pl.concat_str(exprs, separator="", ignore_nulls=True).alias("concat")
             )
             return result["concat"].to_list()
         return None
