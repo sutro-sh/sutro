@@ -446,6 +446,47 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
             description,
         )
 
+    def run_function(self, model_id: str, input_data: Union[dict, BaseModel]):
+        """
+        Run inference using the /functions/run endpoint for immediate model execution.
+        
+        Args:
+            model_id (str): The model name to use (e.g., "clay-bert", "clay-judge")
+            input_data (Union[dict, BaseModel]): The input data to send to the model.
+                Can be a dictionary or a Pydantic model instance
+        
+        Returns:
+            dict: Standardized response with structure:
+                {
+                    "response": str,        # The predicted class/label
+                    "confidence": float,    # Confidence score (0.0-1.0)
+                    "predictions": [        # All predictions sorted by confidence
+                        {"label": str, "confidence": float},
+                        ...
+                    ]
+                }
+        """
+        # Convert Pydantic model to dict if needed
+        if isinstance(input_data, BaseModel):
+            input_data = input_data.model_dump()
+        
+        payload = {
+            "model_id": model_id,
+            "input_data": input_data
+        }
+        
+        try:
+            response = self.do_request("POST", "functions/run", json=payload)
+            return response.json()
+        except requests.HTTPError as e:
+            print(to_colored_text(f"Error: {e.response.status_code}", state="fail"))
+            try:
+                error_response = e.response.json()
+                print(to_colored_text(error_response, state="fail"))
+            except (ValueError, requests.exceptions.JSONDecodeError):
+                print(to_colored_text(f"Response body: {e.response.text}", state="fail"))
+            return None
+
     def infer_per_model(
         self,
         data: Union[List, pd.DataFrame, pl.DataFrame, str],
