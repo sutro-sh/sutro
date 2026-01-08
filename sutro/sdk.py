@@ -41,9 +41,10 @@ SPINNER = Spinners.dots14
 
 
 class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
-    def __init__(self, api_key: str = None, base_url: str = "https://api.sutro.sh/"):
+    def __init__(self, api_key: str = None, base_url: str = "https://api.sutro.sh/", serving_base_url: str = "https://serve.sutro.sh/"):
         self.api_key = api_key or check_for_api_key()
         self.base_url = base_url
+        self.serving_base_url = serving_base_url
         check_version("sutro")
 
     def set_api_key(self, api_key: str):
@@ -73,11 +74,24 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
         """
         self.base_url = base_url
 
+    def set_serving_base_url(self, serving_base_url: str):
+        """
+        Set the serving base URL for the Sutro API.
+
+        This method allows you to set the serving base URL for the Sutro API.
+        The serving base URL is used for function execution requests.
+
+        Args:
+            serving_base_url (str): The serving base URL to set.
+        """
+        self.serving_base_url = serving_base_url
+
     def do_request(
         self,
         method: str,
         endpoint: str,
         api_key_override: Optional[str] = None,
+        base_url_override: Optional[str] = None,
         **kwargs: Any,
     ):
         """
@@ -90,7 +104,8 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
         if "headers" in kwargs:
             headers.update(kwargs.pop("headers"))
 
-        url = f"{self.base_url}/{endpoint.lstrip('/')}"
+        base_url = base_url_override if base_url_override else self.base_url
+        url = f"{base_url}/{endpoint.lstrip('/')}"
 
         # Explicit method dispatch
         method = method.upper()
@@ -476,7 +491,7 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
         }
         
         try:
-            response = self.do_request("POST", "functions/run", json=payload)
+            response = self.do_request("POST", "functions/run", base_url_override=self.serving_base_url, json=payload)
             return response.json()
         except requests.HTTPError as e:
             print(to_colored_text(f"Error: {e.response.status_code}", state="fail"))
