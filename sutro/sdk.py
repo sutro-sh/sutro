@@ -461,12 +461,12 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
             description,
         )
 
-    def run_function(self, model_id: str, input_data: Union[dict, BaseModel]):
+    def run_function(self, name: str, input_data: Union[dict, BaseModel]):
         """
         Run inference using the /functions/run endpoint for immediate model execution.
         
         Args:
-            model_id (str): The model name to use (e.g., "clay-bert", "clay-judge")
+            name (str): The model name to use (e.g., "clay-bert", "clay-judge")
             input_data (Union[dict, BaseModel]): The input data to send to the model.
                 Can be a dictionary or a Pydantic model instance
         
@@ -486,7 +486,7 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
             input_data = input_data.model_dump()
         
         payload = {
-            "model_id": model_id,
+            "name": name,
             "input_data": input_data
         }
         
