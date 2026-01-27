@@ -502,6 +502,72 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
                 print(to_colored_text(f"Response body: {e.response.text}", state="fail"))
             return None
 
+    def batch_run_function(
+        self,
+        name: str,
+        data: Union[List[dict], pl.DataFrame, pd.DataFrame, str],
+        output_column: str = "inference_result",
+        dry_run: bool = False,
+        stay_attached: bool = False,
+        job_name: Optional[str] = None,
+        description: Optional[str] = None,
+    ):
+        """
+        Run a Sutro Function on a large table, dataframe, or file using batch processing.
+
+        This is a convenience method for running batch inference with functions. All function
+        batch jobs run as priority 1, please use for flex processing endpoint for smaller dataset
+        sizes and a more real-time-like experience.
+
+        Args:
+            name (str): The name of the Sutro Function to use.
+            data (Union[List[dict], pd.DataFrame, pl.DataFrame, str]): The data to run inference on.
+                Accepts a list of dictionaries, a DataFrame, or a path to a parquet/CSV file.
+                Dictionary keys or table columns must match the function's expected schema.
+            output_column (str, optional): The column name to store the inference results.
+                Defaults to "inference_result".
+            dry_run (bool, optional): If True, return cost estimates instead of running inference.
+                Defaults to False.
+            stay_attached (bool, optional): If True, the SDK will stay attached to the job and
+                stream progress updates. Defaults to False.
+            job_name (str, optional): A job name for experiment/metadata tracking purposes.
+                Defaults to None.
+            description (str, optional): A job description for experiment/metadata tracking purposes.
+                Defaults to None.
+
+        Returns:
+            str: The ID of the inference job.
+        """
+        # Convert DataFrames/files to list of dicts for function calls
+        if isinstance(data, pd.DataFrame):
+            input_data = data.to_dict(orient="records")
+        elif isinstance(data, pl.DataFrame):
+            input_data = data.to_dicts()
+        elif isinstance(data, str):
+            file_ext = os.path.splitext(data)[1].lower()
+            if file_ext == ".csv":
+                input_data = pl.read_csv(data).to_dicts()
+            elif file_ext == ".parquet":
+                input_data = pl.read_parquet(data).to_dicts()
+            else:
+                raise ValueError(
+                    f"Unsupported file type: {file_ext}. Use .csv or .parquet"
+                )
+        else:
+            # Assume list of dicts
+            input_data = data
+
+        return self.infer(
+            data=input_data,
+            model=name,
+            name=job_name,
+            description=description,
+            output_column=output_column,
+            job_priority=1,  # Function batch jobs always run as P1
+            dry_run=dry_run,
+            stay_attached=stay_attached,
+        )
+
     def infer_per_model(
         self,
         data: Union[List, pd.DataFrame, pl.DataFrame, str],
