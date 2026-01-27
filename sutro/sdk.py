@@ -580,6 +580,7 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
             job_priority=1,  # Function batch jobs always run as P1
             dry_run=dry_run,
             stay_attached=stay_attached,
+            truncate_rows=False
         )
 
     def infer_per_model(
