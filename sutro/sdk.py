@@ -545,7 +545,7 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
                 Defaults to None.
 
         Returns:
-            str: The ID of the inference job.
+            str: The ID of the batch job.
         """
         # Convert DataFrames/files to list of dicts for function calls
         if isinstance(data, pd.DataFrame):
@@ -566,7 +566,9 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
             input_data = data
         else:
             raise ValueError(
-                "The only acceptable inputs to `inputs` are List[dict], pl.DataFrame, pd.DataFrame, or str where str is a filepath to a Parquet or CSV file"
+                "The only acceptable arguments for the `data` parameter are List[dict],"
+                " pl.DataFrame, pd.DataFrame, or str where str is a filepath to a "
+                "Parquet or CSV file"
             )
 
         return self.infer(
