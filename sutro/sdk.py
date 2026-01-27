@@ -41,7 +41,12 @@ SPINNER = Spinners.dots14
 
 
 class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
-    def __init__(self, api_key: str = None, base_url: str = "https://api.sutro.sh/", serving_base_url: str = "https://serve.sutro.sh/"):
+    def __init__(
+        self,
+        api_key: str = None,
+        base_url: str = "https://api.sutro.sh/",
+        serving_base_url: str = "https://serve.sutro.sh/",
+    ):
         self.api_key = api_key or check_for_api_key()
         self.base_url = base_url
         self.serving_base_url = serving_base_url
@@ -464,12 +469,12 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
     def run_function(self, name: str, input_data: Union[dict, BaseModel]):
         """
         Run inference using the /functions/run endpoint for immediate model execution.
-        
+
         Args:
             name (str): The model name to use (e.g., "clay-bert", "clay-judge")
             input_data (Union[dict, BaseModel]): The input data to send to the model.
                 Can be a dictionary or a Pydantic model instance
-        
+
         Returns:
             dict: Standardized response with structure:
                 {
@@ -484,14 +489,16 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
         # Convert Pydantic model to dict if needed
         if isinstance(input_data, BaseModel):
             input_data = input_data.model_dump()
-        
-        payload = {
-            "name": name,
-            "input_data": input_data
-        }
-        
+
+        payload = {"name": name, "input_data": input_data}
+
         try:
-            response = self.do_request("POST", "functions/run", base_url_override=self.serving_base_url, json=payload)
+            response = self.do_request(
+                "POST",
+                "functions/run",
+                base_url_override=self.serving_base_url,
+                json=payload,
+            )
             return response.json()
         except requests.HTTPError as e:
             print(to_colored_text(f"Error: {e.response.status_code}", state="fail"))
@@ -499,7 +506,9 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
                 error_response = e.response.json()
                 print(to_colored_text(error_response, state="fail"))
             except (ValueError, requests.exceptions.JSONDecodeError):
-                print(to_colored_text(f"Response body: {e.response.text}", state="fail"))
+                print(
+                    to_colored_text(f"Response body: {e.response.text}", state="fail")
+                )
             return None
 
     def batch_run_function(
@@ -553,9 +562,12 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
                 raise ValueError(
                     f"Unsupported file type: {file_ext}. Use .csv or .parquet"
                 )
-        else:
-            # Assume list of dicts
+        elif isinstance(data, list):
             input_data = data
+        else:
+            raise ValueError(
+                "The only acceptable inputs to `inputs` are List[dict], pl.DataFrame, pd.DataFrame, or str where str is a filepath to a Parquet or CSV file"
+            )
 
         return self.infer(
             data=input_data,
