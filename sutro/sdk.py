@@ -92,7 +92,7 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
         endpoint: str,
         api_key_override: Optional[str] = None,
         base_url_override: Optional[str] = None,
-        max_retries: int = 3,
+        max_retries: int = 5,
         **kwargs: Any,
     ):
         """
