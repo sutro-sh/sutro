@@ -4,6 +4,9 @@ import polars as pl
 import json
 from typing import Union, List, Optional, Dict, Any, Type
 import os
+
+from langsmith import traceable, get_current_run_tree
+from tqdm import tqdm
 from yaspin import yaspin
 from yaspin.spinners import Spinners
 from colorama import init
@@ -41,7 +44,12 @@ SPINNER = Spinners.dots14
 
 
 class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
-    def __init__(self, api_key: str = None, base_url: str = "https://api.sutro.sh/", serving_base_url: str = "https://serve.sutro.sh/"):
+    def __init__(
+        self,
+        api_key: str = None,
+        base_url: str = "https://api.sutro.sh/",
+        serving_base_url: str = "https://serve.sutro.sh/",
+    ):
         self.api_key = api_key or check_for_api_key()
         self.base_url = base_url
         self.serving_base_url = serving_base_url
@@ -461,15 +469,28 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
             description,
         )
 
-    def run_function(self, name: str, input_data: Union[dict, BaseModel]):
+    def run_function(
+        self,
+        name: str,
+        input_data: Union[dict, BaseModel],
+        langsmith_metadata: Optional[Dict[str, Any]] = None,
+        langsmith_tags: Optional[List[str]] = None,
+    ):
         """
         Run inference using the /functions/run endpoint for immediate model execution.
-        
+
+        Automatically traces to LangSmith when LANGSMITH_TRACING=true is set.
+        Works normally without any tracing if langsmith is not installed or tracing is disabled.
+
         Args:
             name (str): The model name to use (e.g., "clay-bert", "clay-judge")
             input_data (Union[dict, BaseModel]): The input data to send to the model.
-                Can be a dictionary or a Pydantic model instance
-        
+                Can be a dictionary or a Pydantic model instance.
+            langsmith_metadata (dict, optional): Additional metadata to attach to the LangSmith trace.
+                Only used when tracing is enabled.
+            langsmith_tags (list, optional): Tags to attach to the LangSmith trace for filtering.
+                Only used when tracing is enabled.
+
         Returns:
             dict: Standardized response with structure:
                 {
@@ -478,28 +499,118 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
                     "predictions": [        # All predictions sorted by confidence
                         {"label": str, "confidence": float},
                         ...
-                    ]
+                    ],
+                    "run_id": str           # The ID of the function run
                 }
+
+        Example:
+            >>> import sutro
+            >>> so = sutro.Sutro()
+            >>> # Basic usage (traces automatically if LANGSMITH_TRACING=true)
+            >>> result = so.run_function(name="faithfulness-judge", input_data={"text": "..."})
+            >>>
+            >>> # With optional tracing metadata
+            >>> result = so.run_function(
+            ...     name="faithfulness-judge",
+            ...     input_data={"text": "..."},
+            ...     langsmith_metadata={"user_id": "123"},
+            ...     langsmith_tags=["production"]
+            ... )
         """
         # Convert Pydantic model to dict if needed
         if isinstance(input_data, BaseModel):
             input_data = input_data.model_dump()
-        
-        payload = {
-            "name": name,
-            "input_data": input_data
+
+        # Build traceable kwargs for LangSmith (no-op if langsmith not installed)
+        # ls_provider and ls_model_name go inside metadata
+        metadata = {
+            "ls_provider": "sutro",
+            "ls_model_name": name,
         }
-        
+        if langsmith_metadata:
+            metadata.update(langsmith_metadata)
+
+        traceable_kwargs = {
+            "run_type": "llm",
+            "name": "Sutro Function",
+            "metadata": metadata,
+        }
+        if langsmith_tags:
+            traceable_kwargs["tags"] = langsmith_tags
+
+        # If LANGSMITH_TRACING is not enabled, langsmith's @traceable is a no-op
+        @traceable(**traceable_kwargs)
+        def _call_api(input_data: dict) -> dict:
+            payload = {"name": name, "input_data": input_data}
+            try:
+                response = self.do_request(
+                    "POST",
+                    "functions/run",
+                    base_url_override=self.serving_base_url,
+                    json=payload,
+                )
+            except requests.HTTPError as e:
+                # Add error details to LangSmith trace before re-raising
+                run_tree = get_current_run_tree()
+                if run_tree is not None:
+                    error_json = e.response.json()
+
+                    run_tree.add_outputs(
+                        {
+                            "error": {
+                                "status_code": e.response.status_code,
+                                "detail": error_json.get("detail"),
+                            }
+                        }
+                    )
+                raise  # Re-raise so @traceable captures the exception
+
+            result = response.json()
+
+            # Add token usage and metadata to LangSmith trace in native format
+            run_tree = get_current_run_tree()
+            if run_tree is not None:
+                # Build native LangSmith LLM output format
+                llm_output = {}
+
+                # Extract usage data from the "usage" object in the response
+                usage = result.get("usage", {})
+                input_tokens = usage.get("input_tokens")
+                output_tokens = usage.get("output_tokens")
+
+                # Add token usage if available
+                if input_tokens is not None or output_tokens is not None:
+                    token_usage = {}
+                    if input_tokens is not None:
+                        token_usage["input_tokens"] = input_tokens
+                    if output_tokens is not None:
+                        token_usage["output_tokens"] = output_tokens
+                    if input_tokens is not None and output_tokens is not None:
+                        token_usage["total_tokens"] = input_tokens + output_tokens
+
+                    run_tree.set(usage_metadata=token_usage)
+
+                # Add LLM-native output format to the run
+                if llm_output:
+                    run_tree.add_outputs(
+                        {
+                            "llm_output": llm_output,
+                        }
+                    )
+
+            return result
+
         try:
-            response = self.do_request("POST", "functions/run", base_url_override=self.serving_base_url, json=payload)
-            return response.json()
+            return _call_api(input_data)
         except requests.HTTPError as e:
             print(to_colored_text(f"Error: {e.response.status_code}", state="fail"))
             try:
                 error_response = e.response.json()
                 print(to_colored_text(error_response, state="fail"))
             except (ValueError, requests.exceptions.JSONDecodeError):
-                print(to_colored_text(f"Response body: {e.response.text}", state="fail"))
+                print(
+                    to_colored_text(f"Response body: {e.response.text}", state="fail")
+                )
             return None
 
     def infer_per_model(
