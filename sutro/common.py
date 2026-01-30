@@ -16,30 +16,33 @@ EmbeddingModelOptions = Literal[
 
 # Models available for inference.  Keep in sync with the backend configuration
 # so users get helpful autocompletion when selecting a model.
-ModelOptions = Literal[
-    "llama-3.2-3b",
-    "llama-3.1-8b",
-    "llama-3.3-70b",
-    "llama-3.3-70b",
-    "qwen-3-4b",
-    "qwen-3-14b",
-    "qwen-3-32b",
-    "qwen-3-30b-a3b",
-    "qwen-3-235b-a22b",
-    "qwen-3-4b-thinking",
-    "qwen-3-14b-thinking",
-    "qwen-3-32b-thinking",
-    "qwen-3-235b-a22b-thinking",
-    "qwen-3-30b-a3b-thinking",
-    "gemma-3-4b-it",
-    "gemma-3-12b-it",
-    "gemma-3-27b-it",
-    "gpt-oss-20b",
-    "gpt-oss-120b",
-    "qwen-3-embedding-0.6b",
-    "qwen-3-embedding-6b",
-    "qwen-3-embedding-8b",
-]
+ModelOptions = (
+    Literal[
+        "llama-3.2-3b",
+        "llama-3.1-8b",
+        "llama-3.3-70b",
+        "llama-3.3-70b",
+        "qwen-3-4b",
+        "qwen-3-14b",
+        "qwen-3-32b",
+        "qwen-3-30b-a3b",
+        "qwen-3-235b-a22b",
+        "qwen-3-4b-thinking",
+        "qwen-3-14b-thinking",
+        "qwen-3-32b-thinking",
+        "qwen-3-235b-a22b-thinking",
+        "qwen-3-30b-a3b-thinking",
+        "gemma-3-4b-it",
+        "gemma-3-12b-it",
+        "gemma-3-27b-it",
+        "gpt-oss-20b",
+        "gpt-oss-120b",
+        "qwen-3-embedding-0.6b",
+        "qwen-3-embedding-6b",
+        "qwen-3-embedding-8b",
+    ]
+    | str # Accept a string here for those using running a Function
+)
 
 
 # This is how yaspin defines is_jupyter logic

@@ -41,7 +41,12 @@ SPINNER = Spinners.dots14
 
 
 class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
-    def __init__(self, api_key: str = None, base_url: str = "https://api.sutro.sh/", serving_base_url: str = "https://serve.sutro.sh/"):
+    def __init__(
+        self,
+        api_key: str = None,
+        base_url: str = "https://api.sutro.sh/",
+        serving_base_url: str = "https://serve.sutro.sh/",
+    ):
         self.api_key = api_key or check_for_api_key()
         self.base_url = base_url
         self.serving_base_url = serving_base_url
@@ -489,12 +494,12 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
     def run_function(self, name: str, input_data: Union[dict, BaseModel]):
         """
         Run inference using the /functions/run endpoint for immediate model execution.
-        
+
         Args:
             name (str): The model name to use (e.g., "clay-bert", "clay-judge")
             input_data (Union[dict, BaseModel]): The input data to send to the model.
                 Can be a dictionary or a Pydantic model instance
-        
+
         Returns:
             dict: Standardized response with structure:
                 {
@@ -509,14 +514,16 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
         # Convert Pydantic model to dict if needed
         if isinstance(input_data, BaseModel):
             input_data = input_data.model_dump()
-        
-        payload = {
-            "name": name,
-            "input_data": input_data
-        }
-        
+
+        payload = {"name": name, "input_data": input_data}
+
         try:
-            response = self.do_request("POST", "functions/run", base_url_override=self.serving_base_url, json=payload)
+            response = self.do_request(
+                "POST",
+                "functions/run",
+                base_url_override=self.serving_base_url,
+                json=payload,
+            )
             return response.json()
         except requests.HTTPError as e:
             print(to_colored_text(f"Error: {e.response.status_code}", state="fail"))
@@ -524,8 +531,81 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
                 error_response = e.response.json()
                 print(to_colored_text(error_response, state="fail"))
             except (ValueError, requests.exceptions.JSONDecodeError):
-                print(to_colored_text(f"Response body: {e.response.text}", state="fail"))
+                print(
+                    to_colored_text(f"Response body: {e.response.text}", state="fail")
+                )
             return None
+
+    def batch_run_function(
+        self,
+        name: str,
+        data: Union[List[dict], pl.DataFrame, pd.DataFrame, str],
+        output_column: str = "inference_result",
+        dry_run: bool = False,
+        stay_attached: bool = False,
+        job_name: Optional[str] = None,
+        description: Optional[str] = None,
+    ):
+        """
+        Run a Sutro Function on a large table, dataframe, or file using batch processing.
+
+        This is a convenience method for running batch inference with functions. All function
+        batch jobs run as priority 1, please use for flex processing endpoint for smaller dataset
+        sizes and a more real-time-like experience.
+
+        Args:
+            name (str): The name of the Sutro Function to use.
+            data (Union[List[dict], pd.DataFrame, pl.DataFrame, str]): The data to run inference on.
+                Accepts a list of dictionaries, a DataFrame, or a path to a parquet/CSV file.
+                Dictionary keys or table columns must match the function's expected schema.
+            output_column (str, optional): The column name to store the inference results.
+                Defaults to "inference_result".
+            dry_run (bool, optional): If True, return cost estimates instead of running inference.
+                Defaults to False.
+            stay_attached (bool, optional): If True, the SDK will stay attached to the job and
+                stream progress updates. Defaults to False.
+            job_name (str, optional): A job name for experiment/metadata tracking purposes.
+                Defaults to None.
+            description (str, optional): A job description for experiment/metadata tracking purposes.
+                Defaults to None.
+
+        Returns:
+            str: The ID of the batch job.
+        """
+        # Convert DataFrames/files to list of dicts for function calls
+        if isinstance(data, pd.DataFrame):
+            input_data = data.to_dict(orient="records")
+        elif isinstance(data, pl.DataFrame):
+            input_data = data.to_dicts()
+        elif isinstance(data, str):
+            file_ext = os.path.splitext(data)[1].lower()
+            if file_ext == ".csv":
+                input_data = pl.read_csv(data).to_dicts()
+            elif file_ext == ".parquet":
+                input_data = pl.read_parquet(data).to_dicts()
+            else:
+                raise ValueError(
+                    f"Unsupported file type: {file_ext}. Use .csv or .parquet"
+                )
+        elif isinstance(data, list):
+            input_data = data
+        else:
+            raise ValueError(
+                "The only acceptable arguments for the `data` parameter are List[dict],"
+                " pl.DataFrame, pd.DataFrame, or str where str is a filepath to a "
+                "Parquet or CSV file"
+            )
+
+        return self.infer(
+            data=input_data,
+            model=name,
+            name=job_name,
+            description=description,
+            output_column=output_column,
+            job_priority=1,  # Function batch jobs always run as P1
+            dry_run=dry_run,
+            stay_attached=stay_attached,
+        )
 
     def infer_per_model(
         self,
