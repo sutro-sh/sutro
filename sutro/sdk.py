@@ -5,7 +5,6 @@ import json
 from typing import Union, List, Optional, Dict, Any, Type
 import os
 
-from langsmith import traceable, get_current_run_tree
 from tqdm import tqdm
 from yaspin import yaspin
 from yaspin.spinners import Spinners
@@ -24,6 +23,7 @@ from sutro.common import (
     BASE_OUTPUT_COLOR,
 )
 from sutro.interfaces import JobStatus
+from sutro.observability import save_trace_to_langsmith, traced_run
 from sutro.templates.classification import ClassificationTemplates
 from sutro.templates.embed import EmbeddingTemplates
 from sutro.templates.evals import EvalTemplates
@@ -141,8 +141,12 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
             # Only retry on Cloudflare 524 timeout errors
             if e.response.status_code == 524:
                 for attempt in range(max_retries):
-                    wait_time = 2 ** attempt  # Exponential backoff: 1s, 2s, 4s
-                    print(to_colored_text(f"⚠️  Cloudflare timeout (524). Retrying in {wait_time}s... (attempt {attempt + 1}/{max_retries})"))
+                    wait_time = 2**attempt  # Exponential backoff: 1s, 2s, 4s
+                    print(
+                        to_colored_text(
+                            f"⚠️  Cloudflare timeout (524). Retrying in {wait_time}s... (attempt {attempt + 1}/{max_retries})"
+                        )
+                    )
                     time.sleep(wait_time)
 
                     try:
@@ -151,7 +155,10 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
                         return response
                     except requests.HTTPError as retry_error:
                         # If not a 524 or this was the last retry, raise the error
-                        if retry_error.response.status_code != 524 or attempt == max_retries - 1:
+                        if (
+                            retry_error.response.status_code != 524
+                            or attempt == max_retries - 1
+                        ):
                             raise
                         # Otherwise continue to next retry attempt
             else:
@@ -546,87 +553,20 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
         if isinstance(input_data, BaseModel):
             input_data = input_data.model_dump()
 
-        # Build traceable kwargs for LangSmith (no-op if langsmith not installed)
-        # ls_provider and ls_model_name go inside metadata
-        metadata = {
-            "ls_provider": "sutro",
-            "ls_model_name": name,
-        }
-        if langsmith_metadata:
-            metadata.update(langsmith_metadata)
-
-        traceable_kwargs = {
-            "run_type": "llm",
-            "name": "Sutro Function",
-            "metadata": metadata,
-        }
-        if langsmith_tags:
-            traceable_kwargs["tags"] = langsmith_tags
-
-        # If LANGSMITH_TRACING is not enabled, langsmith's @traceable is a no-op
-        @traceable(**traceable_kwargs)
-        def _call_api(input_data: dict) -> dict:
-            payload = {"name": name, "input_data": input_data}
-            try:
-                response = self.do_request(
+        try:
+            result = traced_run(
+                "clay-query-match-judge",
+                lambda: self.do_request(
                     "POST",
                     "functions/run",
                     base_url_override=self.serving_base_url,
-                    json=payload,
-                )
-            except requests.HTTPError as e:
-                # Add error details to LangSmith trace before re-raising
-                run_tree = get_current_run_tree()
-                if run_tree is not None:
-                    error_json = e.response.json()
-
-                    run_tree.add_outputs(
-                        {
-                            "error": {
-                                "status_code": e.response.status_code,
-                                "detail": error_json.get("detail"),
-                            }
-                        }
-                    )
-                raise  # Re-raise so @traceable captures the exception
-
-            result = response.json()
-
-            # Add token usage and metadata to LangSmith trace in native format
-            run_tree = get_current_run_tree()
-            if run_tree is not None:
-                # Build native LangSmith LLM output format
-                llm_output = {}
-
-                # Extract usage data from the "usage" object in the response
-                usage = result.get("usage", {})
-                input_tokens = usage.get("input_tokens")
-                output_tokens = usage.get("output_tokens")
-
-                # Add token usage if available
-                if input_tokens is not None or output_tokens is not None:
-                    token_usage = {}
-                    if input_tokens is not None:
-                        token_usage["input_tokens"] = input_tokens
-                    if output_tokens is not None:
-                        token_usage["output_tokens"] = output_tokens
-                    if input_tokens is not None and output_tokens is not None:
-                        token_usage["total_tokens"] = input_tokens + output_tokens
-
-                    run_tree.set(usage_metadata=token_usage)
-
-                # Add LLM-native output format to the run
-                if llm_output:
-                    run_tree.add_outputs(
-                        {
-                            "llm_output": llm_output,
-                        }
-                    )
+                    json={"name": name, "input_data": input_data},
+                ).json(),
+                langsmith_metadata=langsmith_metadata,
+                langsmith_tags=langsmith_tags,
+            )
 
             return result
-
-        try:
-            return _call_api(input_data)
         except requests.HTTPError as e:
             print(to_colored_text(f"Error: {e.response.status_code}", state="fail"))
             try:
