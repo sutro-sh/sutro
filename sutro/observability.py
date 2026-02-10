@@ -1,6 +1,6 @@
-import os
 from typing import Optional, Dict, Any, List, Callable
 
+import requests
 from langsmith import traceable, get_current_run_tree
 
 
@@ -58,9 +58,7 @@ def traced_run(
     langsmith_tags: Optional[List[str]] = None,
 ) -> dict:
     """
-    Execute an API call wrapped in a LangSmith trace. Intended to be used with
-    singleton requests where we can wrap the code that makes the request and
-    receives the response.
+    Execute an API call wrapped in a LangSmith trace.
 
     The trace captures real wall-clock latency, token usage, and any errors
     from the actual call. Use this when you want accurate latency metrics.
@@ -92,7 +90,25 @@ def traced_run(
 
     @traceable(**traceable_kwargs)
     def _traced_call() -> dict:
-        result = api_call()
+        try:
+            result = api_call()
+        except requests.HTTPError as e:
+            run_tree = get_current_run_tree()
+            if run_tree is not None:
+                try:
+                    error_json = e.response.json()
+                except (ValueError, requests.exceptions.JSONDecodeError):
+                    error_json = {}
+                run_tree.add_outputs(
+                    {
+                        "error": {
+                            "status_code": e.response.status_code,
+                            "detail": error_json.get("detail"),
+                        }
+                    }
+                )
+            raise  # Re-raise so @traceable captures the exception
+
         _attach_run_metadata(result)
         return result
 
