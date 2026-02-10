@@ -23,7 +23,7 @@ from sutro.common import (
     BASE_OUTPUT_COLOR,
 )
 from sutro.interfaces import JobStatus
-from sutro.observability import save_trace_to_langsmith, traced_run
+from sutro.observability import _traced_run
 from sutro.templates.classification import ClassificationTemplates
 from sutro.templates.embed import EmbeddingTemplates
 from sutro.templates.evals import EvalTemplates
@@ -554,19 +554,20 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
             input_data = input_data.model_dump()
 
         try:
-            result = traced_run(
+            return _traced_run(
                 "clay-query-match-judge",
-                lambda: self.do_request(
+                lambda inputs: self.do_request(
                     "POST",
                     "functions/run",
                     base_url_override=self.serving_base_url,
-                    json={"name": name, "input_data": input_data},
+                    json={"name": name, "input_data": inputs},
                 ).json(),
+                # We pass input_data like this (sort of clunky) so we can
+                # easily trace it
+                input_data=input_data,
                 langsmith_metadata=langsmith_metadata,
                 langsmith_tags=langsmith_tags,
             )
-
-            return result
         except requests.HTTPError as e:
             print(to_colored_text(f"Error: {e.response.status_code}", state="fail"))
             try:

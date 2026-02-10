@@ -7,7 +7,7 @@ from langsmith import traceable, get_current_run_tree
 # TODO(cooper) expand this more or make it more ergonomic to use
 # with batch style results. Perhaps there is a more native way in LangSmith
 # to handle these?
-def save_trace_to_langsmith(
+def _save_trace_to_langsmith(
     function_name: str,
     result: dict,
     langsmith_metadata: Optional[Dict[str, Any]] = None,
@@ -41,8 +41,7 @@ def save_trace_to_langsmith(
     if langsmith_tags:
         traceable_kwargs["tags"] = langsmith_tags
 
-    # Note latency with this won't reflect the real time it took to process
-    # the request represented here
+    # Note: latency won't reflect the real time it took to process the request
     @traceable(**traceable_kwargs)
     def _log_result() -> dict:
         _attach_run_metadata(result)
@@ -51,9 +50,10 @@ def save_trace_to_langsmith(
     _log_result()
 
 
-def traced_run(
+def _traced_run(
     function_name: str,
-    api_call: Callable[[], dict],
+    api_call: Callable[[dict], dict],
+    input_data: dict,
     langsmith_metadata: Optional[Dict[str, Any]] = None,
     langsmith_tags: Optional[List[str]] = None,
 ) -> dict:
@@ -65,8 +65,9 @@ def traced_run(
 
     Args:
         function_name: The Function name (e.g. "clay-bert"). Used as ls_model_name.
-        api_call: A zero-arg callable that performs the API request and returns
-            the result dict. Exceptions will be captured in the trace and re-raised.
+        api_call: A callable that performs the API request and returns
+            the result dict. It should take in the input_data dict that the model
+             expects to receive. Exceptions will be captured in the trace and re-raised.
         langsmith_metadata: Extra metadata merged into the trace.
         langsmith_tags: Tags attached to the trace for filtering.
 
@@ -89,9 +90,9 @@ def traced_run(
         traceable_kwargs["tags"] = langsmith_tags
 
     @traceable(**traceable_kwargs)
-    def _traced_call() -> dict:
+    def _traced_call(input_data: dict) -> dict:
         try:
-            result = api_call()
+            result = api_call(input_data)
         except requests.HTTPError as e:
             run_tree = get_current_run_tree()
             if run_tree is not None:
@@ -112,7 +113,7 @@ def traced_run(
         _attach_run_metadata(result)
         return result
 
-    return _traced_call()
+    return _traced_call(input_data)
 
 
 def _attach_run_metadata(result: dict):
