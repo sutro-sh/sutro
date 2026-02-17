@@ -4,6 +4,8 @@ import polars as pl
 import json
 from typing import Union, List, Optional, Dict, Any, Type
 import os
+
+from tqdm import tqdm
 from yaspin import yaspin
 from yaspin.spinners import Spinners
 from colorama import init
@@ -21,6 +23,7 @@ from sutro.common import (
     BASE_OUTPUT_COLOR,
 )
 from sutro.interfaces import JobStatus
+from sutro.observability import _traced_run
 from sutro.templates.classification import ClassificationTemplates
 from sutro.templates.embed import EmbeddingTemplates
 from sutro.templates.evals import EvalTemplates
@@ -97,6 +100,7 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
         endpoint: str,
         api_key_override: Optional[str] = None,
         base_url_override: Optional[str] = None,
+        max_retries: int = 5,
         **kwargs: Any,
     ):
         """
@@ -112,23 +116,54 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
         base_url = base_url_override if base_url_override else self.base_url
         url = f"{base_url}/{endpoint.lstrip('/')}"
 
-        # Explicit method dispatch
-        method = method.upper()
-        if method == "GET":
-            response = requests.get(url, headers=headers, **kwargs)
-        elif method == "POST":
-            response = requests.post(url, headers=headers, **kwargs)
-        elif method == "PUT":
-            response = requests.put(url, headers=headers, **kwargs)
-        elif method == "DELETE":
-            response = requests.delete(url, headers=headers, **kwargs)
-        elif method == "PATCH":
-            response = requests.patch(url, headers=headers, **kwargs)
-        else:
-            raise ValueError(f"Unsupported HTTP method: {method}")
+        # Helper to make the actual HTTP request
+        def _make_request():
+            method_upper = method.upper()
+            if method_upper == "GET":
+                return requests.get(url, headers=headers, **kwargs)
+            elif method_upper == "POST":
+                return requests.post(url, headers=headers, **kwargs)
+            elif method_upper == "PUT":
+                return requests.put(url, headers=headers, **kwargs)
+            elif method_upper == "DELETE":
+                return requests.delete(url, headers=headers, **kwargs)
+            elif method_upper == "PATCH":
+                return requests.patch(url, headers=headers, **kwargs)
+            else:
+                raise ValueError(f"Unsupported HTTP method: {method}")
 
-        response.raise_for_status()
-        return response
+        # Make initial request
+        try:
+            response = _make_request()
+            response.raise_for_status()
+            return response
+        except requests.HTTPError as e:
+            # Only retry on Cloudflare 524 timeout errors
+            if e.response.status_code == 524:
+                for attempt in range(max_retries):
+                    wait_time = 2**attempt  # Exponential backoff: 1s, 2s, 4s
+                    print(
+                        to_colored_text(
+                            f"⚠️  Cloudflare timeout (524). Retrying in {wait_time}s... (attempt {attempt + 1}/{max_retries})"
+                        )
+                    )
+                    time.sleep(wait_time)
+
+                    try:
+                        response = _make_request()
+                        response.raise_for_status()
+                        return response
+                    except requests.HTTPError as retry_error:
+                        # If not a 524 or this was the last retry, raise the error
+                        if (
+                            retry_error.response.status_code != 524
+                            or attempt == max_retries - 1
+                        ):
+                            raise
+                        # Otherwise continue to next retry attempt
+            else:
+                # Not a 524 error, raise immediately
+                raise
 
     def _run_one_batch_inference(
         self,
@@ -466,14 +501,27 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
             description,
         )
 
-    def run_function(self, name: str, input_data: Union[dict, BaseModel]):
+    def run_function(
+        self,
+        name: str,
+        input_data: Union[dict, BaseModel],
+        langsmith_metadata: Optional[Dict[str, Any]] = None,
+        langsmith_tags: Optional[List[str]] = None,
+    ):
         """
         Run inference using the /functions/run endpoint for immediate model execution.
+
+        Automatically traces to LangSmith when LANGSMITH_TRACING=true is set.
+        Works normally without any tracing if langsmith is not installed or tracing is disabled.
 
         Args:
             name (str): The model name to use (e.g., "clay-bert", "clay-judge")
             input_data (Union[dict, BaseModel]): The input data to send to the model.
-                Can be a dictionary or a Pydantic model instance
+                Can be a dictionary or a Pydantic model instance.
+            langsmith_metadata (dict, optional): Additional metadata to attach to the LangSmith trace.
+                Only used when tracing is enabled.
+            langsmith_tags (list, optional): Tags to attach to the LangSmith trace for filtering.
+                Only used when tracing is enabled.
 
         Returns:
             dict: Standardized response with structure:
@@ -483,23 +531,43 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
                     "predictions": [        # All predictions sorted by confidence
                         {"label": str, "confidence": float},
                         ...
-                    ]
+                    ],
+                    "run_id": str           # The ID of the function run
                 }
+
+        Example:
+            >>> import sutro
+            >>> so = sutro.Sutro()
+            >>> # Basic usage (traces automatically if LANGSMITH_TRACING=true)
+            >>> result = so.run_function(name="faithfulness-judge", input_data={"text": "..."})
+            >>>
+            >>> # With optional tracing metadata
+            >>> result = so.run_function(
+            ...     name="faithfulness-judge",
+            ...     input_data={"text": "..."},
+            ...     langsmith_metadata={"user_id": "123"},
+            ...     langsmith_tags=["production"]
+            ... )
         """
         # Convert Pydantic model to dict if needed
         if isinstance(input_data, BaseModel):
             input_data = input_data.model_dump()
 
-        payload = {"name": name, "input_data": input_data}
-
         try:
-            response = self.do_request(
-                "POST",
-                "functions/run",
-                base_url_override=self.serving_base_url,
-                json=payload,
+            return _traced_run(
+                "clay-query-match-judge",
+                lambda inputs: self.do_request(
+                    "POST",
+                    "functions/run",
+                    base_url_override=self.serving_base_url,
+                    json={"name": name, "input_data": inputs},
+                ).json(),
+                # We pass input_data like this (sort of clunky) so we can
+                # easily trace it
+                input_data=input_data,
+                langsmith_metadata=langsmith_metadata,
+                langsmith_tags=langsmith_tags,
             )
-            return response.json()
         except requests.HTTPError as e:
             print(to_colored_text(f"Error: {e.response.status_code}", state="fail"))
             try:
@@ -515,6 +583,7 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
         self,
         name: str,
         data: Union[List[dict], pl.DataFrame, pd.DataFrame, str],
+        job_priority: int | None = 0,
         output_column: str = "inference_result",
         dry_run: bool = False,
         stay_attached: bool = False,
@@ -577,10 +646,10 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
             name=job_name,
             description=description,
             output_column=output_column,
-            job_priority=1,  # Function batch jobs always run as P1
+            job_priority=job_priority,
             dry_run=dry_run,
             stay_attached=stay_attached,
-            truncate_rows=False
+            truncate_rows=False,
         )
 
     def infer_per_model(
@@ -1022,6 +1091,8 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
                 color=BASE_OUTPUT_COLOR,
             ) as spinner:
                 try:
+                    # TODO(cooper) refactor to use /jobs/{job_id}/results endpoint
+                    #  (more resource efficient)
                     response = self.do_request("POST", "job-results", json=payload)
                     response_data = response.json()
                     spinner.write(
@@ -1047,12 +1118,12 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
                 spinner.write(
                     to_colored_text("✔ Results saved to cache", state="success")
                 )
-
         # Ordering inputs col first seems most logical/useful
         column_config = [
             ("inputs", include_inputs),
             (output_column, True),
             ("cumulative_logprobs", include_cumulative_logprobs),
+            ("confidence_scores", "confidence_scores" in results_df.columns),
         ]
 
         columns_to_keep = [
