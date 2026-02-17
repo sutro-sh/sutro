@@ -583,6 +583,7 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
         self,
         name: str,
         data: Union[List[dict], pl.DataFrame, pd.DataFrame, str],
+        job_priority: int | None = 0,
         output_column: str = "inference_result",
         dry_run: bool = False,
         stay_attached: bool = False,
@@ -645,7 +646,7 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
             name=job_name,
             description=description,
             output_column=output_column,
-            job_priority=1,  # Function batch jobs always run as P1
+            job_priority=job_priority,
             dry_run=dry_run,
             stay_attached=stay_attached,
             truncate_rows=False,
@@ -1090,6 +1091,8 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
                 color=BASE_OUTPUT_COLOR,
             ) as spinner:
                 try:
+                    # TODO(cooper) refactor to use /jobs/{job_id}/results endpoint
+                    #  (more resource efficient)
                     response = self.do_request("POST", "job-results", json=payload)
                     response_data = response.json()
                     spinner.write(
@@ -1115,12 +1118,12 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
                 spinner.write(
                     to_colored_text("✔ Results saved to cache", state="success")
                 )
-
         # Ordering inputs col first seems most logical/useful
         column_config = [
             ("inputs", include_inputs),
             (output_column, True),
             ("cumulative_logprobs", include_cumulative_logprobs),
+            ("confidence_scores", "confidence_scores" in results_df.columns),
         ]
 
         columns_to_keep = [
