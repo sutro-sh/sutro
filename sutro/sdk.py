@@ -579,6 +579,79 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
                 )
             return None
 
+    def batch_run_function(
+        self,
+        name: str,
+        data: Union[List[dict], pl.DataFrame, pd.DataFrame, str],
+        job_priority: int | None = 0,
+        output_column: str = "inference_result",
+        dry_run: bool = False,
+        stay_attached: bool = False,
+        job_name: Optional[str] = None,
+        description: Optional[str] = None,
+    ):
+        """
+        Run a Sutro Function on a large table, dataframe, or file using batch processing.
+
+        This is a convenience method for running batch inference with functions. All function
+        batch jobs run as priority 1, please use for flex processing endpoint for smaller dataset
+        sizes and a more real-time-like experience.
+
+        Args:
+            name (str): The name of the Sutro Function to use.
+            data (Union[List[dict], pd.DataFrame, pl.DataFrame, str]): The data to run inference on.
+                Accepts a list of dictionaries, a DataFrame, or a path to a parquet/CSV file.
+                Dictionary keys or table columns must match the function's expected schema.
+            output_column (str, optional): The column name to store the inference results.
+                Defaults to "inference_result".
+            dry_run (bool, optional): If True, return cost estimates instead of running inference.
+                Defaults to False.
+            stay_attached (bool, optional): If True, the SDK will stay attached to the job and
+                stream progress updates. Defaults to False.
+            job_name (str, optional): A job name for experiment/metadata tracking purposes.
+                Defaults to None.
+            description (str, optional): A job description for experiment/metadata tracking purposes.
+                Defaults to None.
+
+        Returns:
+            str: The ID of the batch job.
+        """
+        # Convert DataFrames/files to list of dicts for function calls
+        if isinstance(data, pd.DataFrame):
+            input_data = data.to_dict(orient="records")
+        elif isinstance(data, pl.DataFrame):
+            input_data = data.to_dicts()
+        elif isinstance(data, str):
+            file_ext = os.path.splitext(data)[1].lower()
+            if file_ext == ".csv":
+                input_data = pl.read_csv(data).to_dicts()
+            elif file_ext == ".parquet":
+                input_data = pl.read_parquet(data).to_dicts()
+            else:
+                raise ValueError(
+                    f"Unsupported file type: {file_ext}. Use .csv or .parquet"
+                )
+        elif isinstance(data, list):
+            input_data = data
+        else:
+            raise ValueError(
+                "The only acceptable arguments for the `data` parameter are List[dict],"
+                " pl.DataFrame, pd.DataFrame, or str where str is a filepath to a "
+                "Parquet or CSV file"
+            )
+
+        return self.infer(
+            data=input_data,
+            model=name,
+            name=job_name,
+            description=description,
+            output_column=output_column,
+            job_priority=job_priority,
+            dry_run=dry_run,
+            stay_attached=stay_attached,
+            truncate_rows=False,
+        )
+
     def infer_per_model(
         self,
         data: Union[List, pd.DataFrame, pl.DataFrame, str],
@@ -1018,6 +1091,8 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
                 color=BASE_OUTPUT_COLOR,
             ) as spinner:
                 try:
+                    # TODO(cooper) refactor to use /jobs/{job_id}/results endpoint
+                    #  (more resource efficient)
                     response = self.do_request("POST", "job-results", json=payload)
                     response_data = response.json()
                     spinner.write(
@@ -1043,12 +1118,12 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
                 spinner.write(
                     to_colored_text("✔ Results saved to cache", state="success")
                 )
-
         # Ordering inputs col first seems most logical/useful
         column_config = [
             ("inputs", include_inputs),
             (output_column, True),
             ("cumulative_logprobs", include_cumulative_logprobs),
+            ("confidence_scores", "confidence_scores" in results_df.columns),
         ]
 
         columns_to_keep = [
