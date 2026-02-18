@@ -1123,7 +1123,7 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
             ("inputs", include_inputs),
             (output_column, True),
             ("cumulative_logprobs", include_cumulative_logprobs),
-            ("confidence_scores", "confidence_scores" in results_df.columns),
+            ("confidence_score", "confidence_score" in results_df.columns),
         ]
 
         columns_to_keep = [
