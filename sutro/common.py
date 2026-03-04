@@ -108,9 +108,16 @@ def do_dataframe_column_concatenation(
         raise ValueError(f"Error handling column concatentation: {e}")
 
 
-def handle_data_helper(
+def prepare_input_data(
     data: Union[List, pd.DataFrame, pl.DataFrame, str], column: str = None
-):
+) -> tuple:
+    """Process *data* into a value suitable for the ``inputs`` API field.
+
+    Returns ``(input_data, column_name)`` where *column_name* is set only
+    when the API should receive it as a separate ``column_name`` field (i.e.
+    for dataset references).  For all other input types the column is resolved
+    client-side and *column_name* is ``None``.
+    """
     if isinstance(data, list):
         input_data = data
     elif isinstance(data, (pd.DataFrame, pl.DataFrame)):
@@ -122,7 +129,9 @@ def handle_data_helper(
             input_data = data[column].to_list()
     elif isinstance(data, str):
         if data.startswith("dataset-"):
-            input_data = data + ":" + column
+            return data, column
+        elif data.startswith("https://") or data.startswith("http://"):
+            return data, column
         else:
             file_ext = os.path.splitext(data)[1].lower()
             if file_ext == ".csv":
@@ -146,7 +155,7 @@ def handle_data_helper(
             "Unsupported data type. Please provide a list, DataFrame, or file path."
         )
 
-    return input_data
+    return input_data, None
 
 
 def normalize_output_schema(
