@@ -129,6 +129,10 @@ def prepare_input_data(
             input_data = data[column].to_list()
     elif isinstance(data, str):
         if data.startswith("dataset-"):
+            if not isinstance(column, str) or len(column.strip()) == 0:
+                raise ValueError(
+                    "Column name must be a non-empty string for dataset input"
+                )
             return data, column
         elif data.startswith("https://") or data.startswith("http://"):
             return data, column
