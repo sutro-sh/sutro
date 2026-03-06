@@ -129,14 +129,6 @@ def prepare_input_data(
             input_data = data[column].to_list()
     elif isinstance(data, str):
         if data.startswith("dataset-"):
-            # Support deprecated "dataset-<uuid>:<column>" format for now
-            if ":" in data:
-                if column is not None:
-                    raise ValueError(
-                        "Column was provided both in the dataset string and as a parameter — use one or the other"
-                    )
-                dataset_id, embedded_column = data.split(":", maxsplit=1)
-                return dataset_id, embedded_column
             if not isinstance(column, str) or len(column.strip()) == 0:
                 raise ValueError(
                     "Column name must be a non-empty string for dataset input"
