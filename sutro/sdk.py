@@ -15,7 +15,7 @@ import pyarrow.parquet as pq
 import shutil
 from sutro.common import (
     ModelOptions,
-    handle_data_helper,
+    prepare_input_data,
     normalize_output_schema,
     to_colored_text,
     fancy_tqdm,
@@ -192,7 +192,7 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
                 f"Job description cannot exceed {JOB_DESCRIPTION_CHAR_LIMIT} characters."
             )
 
-        input_data = handle_data_helper(data, column)
+        input_data, column_name = prepare_input_data(data, column)
         payload = {
             "model": model,
             "inputs": input_data,
@@ -206,6 +206,8 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
             "name": name,
             "description": description,
         }
+        if column_name is not None:
+            payload["column_name"] = column_name
 
         # There are two gotchas with yaspin:
         # 1. Can't use print while in spinner is running

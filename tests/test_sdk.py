@@ -9,7 +9,7 @@ import pandas as pd
 from colorama import Fore, Style
 
 from sutro.sdk import Sutro
-from sutro.common import to_colored_text
+from sutro.common import to_colored_text, prepare_input_data
 
 
 class TestSutro(unittest.TestCase):
@@ -782,6 +782,26 @@ class TestColorFormatting(unittest.TestCase):
             colored_message = to_colored_text(message, state=state)
             expected_message = f"{expected_color}{message}{Style.RESET_ALL}"
             self.assertEqual(colored_message, expected_message)
+
+
+class TestPrepareInputData(unittest.TestCase):
+    def test_dataset_requires_non_empty_string_column(self):
+        with self.assertRaises(ValueError):
+            prepare_input_data("dataset-123", None)
+
+        with self.assertRaises(ValueError):
+            prepare_input_data("dataset-123", "")
+
+        with self.assertRaises(ValueError):
+            prepare_input_data("dataset-123", "   ")
+
+        with self.assertRaises(ValueError):
+            prepare_input_data("dataset-123", ["text"])
+
+    def test_dataset_with_valid_column(self):
+        input_data, column_name = prepare_input_data("dataset-123", "text")
+        self.assertEqual(input_data, "dataset-123")
+        self.assertEqual(column_name, "text")
 
 
 if __name__ == "__main__":
