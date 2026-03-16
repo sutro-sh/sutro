@@ -23,7 +23,12 @@ from sutro.common import (
     BASE_OUTPUT_COLOR,
 )
 from sutro.interfaces import JobStatus
-from sutro.observability import _traced_run
+from sutro.observability import (
+    _traced_run,
+    _create_batch_parent_trace,
+    _find_batch_parent_trace,
+    _log_batch_child_traces,
+)
 from sutro.templates.classification import ClassificationTemplates
 from sutro.templates.embed import EmbeddingTemplates
 from sutro.templates.evals import EvalTemplates
@@ -591,6 +596,8 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
         stay_attached: bool = False,
         job_name: Optional[str] = None,
         description: Optional[str] = None,
+        langsmith_metadata: Optional[Dict[str, Any]] = None,
+        langsmith_tags: Optional[List[str]] = None,
     ):
         """
         Run a Sutro Function on a large table, dataframe, or file using batch processing.
@@ -598,6 +605,10 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
         This is a convenience method for running batch inference with functions. All function
         batch jobs run as priority 1, please use for flex processing endpoint for smaller dataset
         sizes and a more real-time-like experience.
+
+        Automatically traces to LangSmith when LANGSMITH_TRACING=true is set, not a dry run and stay_attached=False.
+        A parent trace is created at job submission time, and child traces (one per row) are added when results
+        are retrieved via get_job_results().
 
         Args:
             name (str): The name of the Sutro Function to use.
@@ -609,11 +620,15 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
             dry_run (bool, optional): If True, return cost estimates instead of running inference.
                 Defaults to False.
             stay_attached (bool, optional): If True, the SDK will stay attached to the job and
-                stream progress updates. Defaults to False.
+                stream progress updates. Not compatible with LangSmith tracing. Defaults to False.
             job_name (str, optional): A job name for experiment/metadata tracking purposes.
                 Defaults to None.
             description (str, optional): A job description for experiment/metadata tracking purposes.
                 Defaults to None.
+            langsmith_metadata (dict, optional): Additional metadata to attach to the LangSmith trace.
+                Only used when tracing is enabled.
+            langsmith_tags (list, optional): Tags to attach to the LangSmith trace for filtering.
+                Only used when tracing is enabled.
 
         Returns:
             str: The ID of the batch job.
@@ -642,7 +657,7 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
                 "Parquet or CSV file"
             )
 
-        return self.infer(
+        job_id = self.infer(
             data=input_data,
             model=name,
             name=job_name,
@@ -653,6 +668,17 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
             stay_attached=stay_attached,
             truncate_rows=False,
         )
+
+        if job_id and not dry_run and not stay_attached:
+            _create_batch_parent_trace(
+                function_name=name,
+                job_id=job_id,
+                num_rows=len(input_data),
+                langsmith_metadata=langsmith_metadata,
+                langsmith_tags=langsmith_tags,
+            )
+
+        return job_id
 
     def infer_per_model(
         self,
@@ -1071,6 +1097,14 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
             num_columns = pq.read_table(file_path).num_columns
             contains_expected_columns = num_columns == expected_num_columns
 
+        # Check if a parent LangSmith trace exists for this job (created at
+        # submission time via batch_run_function). If so, we'll log child traces
+        # when results are fetched from the API.
+        parent_trace = _find_batch_parent_trace(job_id)
+        # If langsmith tracing is active for this job, ensure we fetch inputs
+        # for the child traces even if the caller didn't request them
+        fetch_include_inputs = include_inputs or (parent_trace is not None)
+
         if disable_cache == False and contains_expected_columns:
             with yaspin(
                 SPINNER,
@@ -1084,7 +1118,7 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
         else:
             payload = {
                 "job_id": job_id,
-                "include_inputs": include_inputs,
+                "include_inputs": fetch_include_inputs,
                 "include_cumulative_logprobs": include_cumulative_logprobs,
             }
             with yaspin(
@@ -1109,6 +1143,19 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
                     spinner.stop()
                     print(to_colored_text(e.response.json(), state="fail"))
                     return None
+
+            # Log child traces to LangSmith if a parent trace exists for this job
+            if parent_trace:
+                raw_inputs = response_data["results"].get("inputs", [])
+                raw_outputs = response_data["results"].get("outputs", [])
+                job_details = self._fetch_job(job_id)
+                _log_batch_child_traces(
+                    job_id=job_id,
+                    parent_trace=parent_trace,
+                    inputs=raw_inputs,
+                    outputs=raw_outputs,
+                    job_details=job_details,
+                )
 
             results_df = pl.DataFrame(response_data["results"])
 
