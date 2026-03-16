@@ -25,9 +25,9 @@ from sutro.common import (
 from sutro.interfaces import JobStatus
 from sutro.observability import (
     _traced_run,
-    _create_batch_parent_trace,
+    _create_batch_traces,
     _find_batch_parent_trace,
-    _log_batch_child_traces,
+    _complete_batch_traces,
 )
 from sutro.templates.classification import ClassificationTemplates
 from sutro.templates.embed import EmbeddingTemplates
@@ -670,10 +670,10 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
         )
 
         if job_id and not dry_run and not stay_attached:
-            _create_batch_parent_trace(
+            _create_batch_traces(
                 function_name=name,
                 job_id=job_id,
-                num_rows=len(input_data),
+                input_data=input_data,
                 langsmith_metadata=langsmith_metadata,
                 langsmith_tags=langsmith_tags,
             )
@@ -1098,12 +1098,9 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
             contains_expected_columns = num_columns == expected_num_columns
 
         # Check if a parent LangSmith trace exists for this job (created at
-        # submission time via batch_run_function). If so, we'll log child traces
-        # when results are fetched from the API.
+        # submission time via batch_run_function). If so, we'll complete the
+        # child traces with outputs when results are fetched from the API.
         parent_trace = _find_batch_parent_trace(job_id)
-        # If langsmith tracing is active for this job, ensure we fetch inputs
-        # for the child traces even if the caller didn't request them
-        fetch_include_inputs = include_inputs or (parent_trace is not None)
 
         if disable_cache == False and contains_expected_columns:
             with yaspin(
@@ -1118,7 +1115,7 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
         else:
             payload = {
                 "job_id": job_id,
-                "include_inputs": fetch_include_inputs,
+                "include_inputs": include_inputs,
                 "include_cumulative_logprobs": include_cumulative_logprobs,
             }
             with yaspin(
@@ -1144,15 +1141,14 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
                     print(to_colored_text(e.response.json(), state="fail"))
                     return None
 
-            # Log child traces to LangSmith if a parent trace exists for this job
+            # Complete LangSmith child traces with outputs if parent trace exists
             if parent_trace:
-                raw_inputs = response_data["results"].get("inputs", [])
                 raw_outputs = response_data["results"].get("outputs", [])
                 job_details = self._fetch_job(job_id)
-                _log_batch_child_traces(
+                _complete_batch_traces(
                     job_id=job_id,
                     parent_trace=parent_trace,
-                    inputs=raw_inputs,
+                    num_rows=len(raw_outputs),
                     outputs=raw_outputs,
                     job_details=job_details,
                 )

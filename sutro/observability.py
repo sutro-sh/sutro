@@ -11,6 +11,15 @@ from langsmith import traceable, get_current_run_tree, Client
 
 logger = logging.getLogger(__name__)
 
+# Fixed namespace for deterministic child run IDs.
+# uuid5(SUTRO_NAMESPACE, f"{job_id}-{row_index}") produces the same UUID
+# at submission time and retrieval time, so no state needs to be stored.
+_SUTRO_NAMESPACE = uuid.UUID("f47ac10b-58cc-4372-a567-0e02b2c3d479")
+
+
+def _child_run_id(job_id: str, row_index: int) -> uuid.UUID:
+    return uuid.uuid5(_SUTRO_NAMESPACE, f"{job_id}-{row_index}")
+
 
 def _try_parse_json(value: Any, fallback_key: str) -> dict:
     """Try to parse a value as JSON. If it's already a dict, return it.
@@ -32,21 +41,24 @@ def _is_langsmith_tracing_enabled() -> bool:
     return os.environ.get("LANGSMITH_TRACING", "").lower() == "true"
 
 
-def _create_batch_parent_trace(
+def _create_batch_traces(
     function_name: str,
     job_id: str,
-    num_rows: int,
+    input_data: List[dict],
     langsmith_metadata: Optional[Dict[str, Any]] = None,
     langsmith_tags: Optional[List[str]] = None,
 ) -> bool:
     """
-    Create a parent LangSmith trace for a batch function job.
+    Create a parent LangSmith trace and child traces for a batch function job.
 
-    Called at job submission time so that an artifact is immediately visible
-    in LangSmith while the batch job is running. The trace is left open
-    (no end_time) until results are retrieved and child traces are added.
+    Called at job submission time so that traces are immediately visible in
+    LangSmith while the batch job is running. All traces are left open
+    (no end_time) until results are retrieved via _complete_batch_traces.
 
-    Returns True if the trace was created successfully.
+    Child traces use deterministic UUIDs based on job_id + row index so they
+    can be updated at retrieval time without storing any state.
+
+    Returns True if traces were created successfully.
     """
     if not _is_langsmith_tracing_enabled():
         return False
@@ -63,26 +75,44 @@ def _create_batch_parent_trace(
         if langsmith_metadata:
             metadata.update(langsmith_metadata)
 
-        kwargs = {
+        now = datetime.now(timezone.utc)
+        parent_id = uuid.uuid4()
+
+        parent_kwargs = {
             "name": "Sutro Batch Function",
             "run_type": "chain",
-            "id": uuid.uuid4(),
+            "id": parent_id,
             "inputs": {
                 "function_name": function_name,
-                "num_rows": num_rows,
+                "num_rows": len(input_data),
                 "job_id": job_id,
             },
             "extra": {"metadata": metadata},
-            "start_time": datetime.now(timezone.utc),
+            "start_time": now,
         }
         if langsmith_tags:
-            kwargs["tags"] = langsmith_tags
+            parent_kwargs["tags"] = langsmith_tags
 
-        client.create_run(**kwargs)
+        client.create_run(**parent_kwargs)
+
+        for i, inp in enumerate(input_data):
+            child_kwargs = {
+                "name": "Sutro Function",
+                "run_type": "llm",
+                "id": _child_run_id(job_id, i),
+                "parent_run_id": parent_id,
+                "inputs": {"input_data": inp},
+                "extra": {"metadata": metadata},
+                "start_time": now,
+            }
+            if langsmith_tags:
+                child_kwargs["tags"] = langsmith_tags
+            client.create_run(**child_kwargs)
+
         return True
     except Exception:
         logger.warning(
-            "Failed to create LangSmith parent trace for batch job %s",
+            "Failed to create LangSmith traces for batch job %s",
             job_id,
             exc_info=True,
         )
@@ -106,7 +136,7 @@ def _find_batch_parent_trace(job_id: str) -> Optional[dict]:
         runs = list(
             client.list_runs(
                 project_name=project_name,
-                filter=f'has(metadata, \'{{"sutro_job_id": "{job_id}"}}\')',
+                filter=f'and(has(metadata, \'{{"sutro_job_id": "{job_id}"}}\'), eq(name, "Sutro Batch Function"))',
                 limit=1,
             )
         )
@@ -116,7 +146,7 @@ def _find_batch_parent_trace(job_id: str) -> Optional[dict]:
 
         parent_run = runs[0]
         # If the parent trace already has an end_time, child traces were
-        # already logged on a previous get_job_results call — skip re-logging
+        # already completed on a previous get_job_results call — skip
         if parent_run.end_time is not None:
             return None
 
@@ -136,38 +166,38 @@ def _find_batch_parent_trace(job_id: str) -> Optional[dict]:
         return None
 
 
-def _log_batch_child_traces(
+def _complete_batch_traces(
     job_id: str,
     parent_trace: dict,
-    inputs: List[Any],
+    num_rows: int,
     outputs: List[Any],
     job_details: Optional[dict] = None,
 ):
     """
-    Create a child trace per row under the given parent trace, then mark
-    the parent trace as complete.
+    Update child traces with outputs and mark the parent trace as complete.
+
+    Child traces are identified by deterministic UUIDs matching those created
+    in _create_batch_traces. Only outputs and token usage are updated.
 
     Args:
         job_id: The Sutro batch job ID.
-        parent_trace: Dict returned by _find_batch_parent_trace with id, metadata, tags.
-        inputs: Per-row inputs from the batch results.
+        parent_trace: Dict returned by _find_batch_parent_trace.
+        num_rows: Total number of rows in the batch (used for deterministic IDs).
         outputs: Per-row outputs from the batch results.
         job_details: Optional job dict from GET /jobs/{job_id} with token counts.
     """
+    from langsmith.utils import LangSmithConflictError
+
     try:
         client = Client()
 
-        parent_run_id = parent_trace["id"]
         metadata = parent_trace["metadata"]
-        tags = parent_trace["tags"]
-
         now = datetime.now(timezone.utc)
 
         # Compute per-row token estimates by splitting aggregate evenly
-        # since the only way to show total token count in Langsmith dashboard
-        # is via aggreagaing the child runs (batch rows) of the main parent trace
+        # since the only way to show total token count in the LangSmith dashboard
+        # is via aggregating the child runs of the parent trace
         per_row_usage = None
-        num_rows = len(outputs)
         if job_details and num_rows > 0:
             total_input = job_details.get("input_tokens")
             total_output = job_details.get("output_tokens")
@@ -182,37 +212,52 @@ def _log_batch_child_traces(
                         per_row_usage["input_tokens"] + per_row_usage["output_tokens"]
                     )
 
-        for inp, out in zip(inputs, outputs):
-            parsed_inp = inp if isinstance(inp, dict) else {"input_data": inp}
+        for i, out in enumerate(outputs):
             parsed_out = _try_parse_json(out, "output")
             child_metadata = dict(metadata)
             if per_row_usage:
                 child_metadata["usage_metadata"] = per_row_usage
-            child_kwargs = {
-                "name": "Sutro Function",
-                "run_type": "llm",
-                "id": uuid.uuid4(),
-                "parent_run_id": parent_run_id,
-                "inputs": parsed_inp,
-                "outputs": parsed_out,
-                "start_time": now,
-                "end_time": now,
-                "extra": {"metadata": child_metadata},
-            }
-            if tags:
-                child_kwargs["tags"] = tags
-            client.create_run(**child_kwargs)
+            try:
+                client.update_run(
+                    _child_run_id(job_id, i),
+                    end_time=now,
+                    outputs=parsed_out,
+                    extra={"metadata": child_metadata},
+                )
+            except Exception as e:
+                if isinstance(e, LangSmithConflictError):
+                    continue  # Already completed, skip
+                logger.warning(
+                    "Failed to update LangSmith child trace %d for batch job %s",
+                    i,
+                    job_id,
+                    exc_info=True,
+                )
 
-        parent_outputs = {"job_id": job_id}
-
-        client.update_run(
-            parent_run_id,
-            end_time=now,
-            outputs=parent_outputs,
-        )
+        # Always try to complete the parent, even if some children failed.
+        # The SDK may flush buffered child writes during this call, causing
+        # a 409 conflict from a *child* that masks the parent update. Retry
+        # a few times to work around this.
+        for attempt in range(3):
+            try:
+                client.update_run(
+                    parent_trace["id"],
+                    end_time=now,
+                    outputs={"job_id": job_id},
+                )
+                break
+            except Exception as e:
+                if isinstance(e, LangSmithConflictError):
+                    continue  # Likely a buffered child conflict, retry
+                logger.warning(
+                    "Failed to complete LangSmith parent trace for batch job %s",
+                    job_id,
+                    exc_info=True,
+                )
+                break
     except Exception:
         logger.warning(
-            "Failed to log LangSmith child traces for batch job %s",
+            "Failed to complete LangSmith traces for batch job %s",
             job_id,
             exc_info=True,
         )
