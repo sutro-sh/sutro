@@ -25,6 +25,7 @@ from sutro.common import (
 from sutro.interfaces import JobStatus
 from sutro.observability import (
     _traced_run,
+    _is_langsmith_tracing_enabled,
     _create_batch_traces,
     _has_open_batch_traces,
     _complete_batch_traces,
@@ -676,13 +677,19 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
         )
 
         if job_id and not dry_run and not stay_attached:
-            _create_batch_traces(
+            traced = _create_batch_traces(
                 function_name=name,
                 job_id=job_id,
                 input_data=input_data,
                 langsmith_metadata=langsmith_metadata,
                 langsmith_tags=langsmith_tags,
             )
+            if traced:
+                print(
+                    to_colored_text(
+                        f"📊 LangSmith tracing enabled — {len(input_data):,} traces created for {job_id}"
+                    )
+                )
 
         return job_id
 
@@ -1163,6 +1170,7 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
 
         # Complete LangSmith traces with outputs regardless of source is cache or API request
         if has_open_traces and raw_outputs is not None:
+            print(to_colored_text(f"📊 Completing LangSmith traces for {job_id}..."))
             job_details = self._fetch_job(job_id)
             _complete_batch_traces(
                 job_id=job_id,
@@ -1170,6 +1178,7 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
                 outputs=raw_outputs,
                 job_details=job_details,
             )
+            print(to_colored_text(f"📊 LangSmith traces completed for {job_id}"))
 
             results_df = results_df.rename({"outputs": output_column})
 

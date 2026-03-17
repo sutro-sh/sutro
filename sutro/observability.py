@@ -107,12 +107,8 @@ def _create_batch_traces(
         logger.debug("[langsmith] batch_ingest_runs returned")
 
         return True
-    except Exception:
-        logger.warning(
-            "Failed to create LangSmith traces for batch job %s",
-            job_id,
-            exc_info=True,
-        )
+    except Exception as e:
+        print(f"Warning: Failed to create LangSmith traces for batch job {job_id}: {e}")
         return False
 
 
@@ -144,12 +140,8 @@ def _has_open_batch_traces(job_id: str) -> bool:
 
         # If it already has an end_time, traces were already completed
         return runs[0].end_time is None
-    except Exception:
-        logger.warning(
-            "Failed to check LangSmith traces for batch job %s",
-            job_id,
-            exc_info=True,
-        )
+    except Exception as e:
+        print(f"Warning: Failed to check LangSmith traces for batch job {job_id}: {e}")
         return False
 
 
@@ -217,12 +209,8 @@ def _complete_batch_traces(
         logger.debug("[langsmith] Calling batch_ingest_runs for %d updates...", len(updates))
         client.batch_ingest_runs(update=updates)
         logger.debug("[langsmith] batch_ingest_runs (update) returned")
-    except Exception:
-        logger.warning(
-            "Failed to complete LangSmith traces for batch job %s",
-            job_id,
-            exc_info=True,
-        )
+    except Exception as e:
+        print(f"Warning: Failed to complete LangSmith traces for batch job {job_id}: {e}")
 
 
 def _traced_run(
