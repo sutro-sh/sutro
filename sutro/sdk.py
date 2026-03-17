@@ -634,6 +634,12 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
             str: The ID of the batch job.
         """
         # Convert DataFrames/files to list of dicts for function calls
+        if stay_attached and _is_langsmith_tracing_enabled():
+            raise ValueError(
+                "Attached mode is not compatablie with LangSmith tracing. "
+                "Please set one of stay_attached OR LANGSMITH_TRACING env var."
+            )
+
         if isinstance(data, pd.DataFrame):
             input_data = data.to_dict(orient="records")
         elif isinstance(data, pl.DataFrame):
