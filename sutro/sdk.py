@@ -23,7 +23,13 @@ from sutro.common import (
     BASE_OUTPUT_COLOR,
 )
 from sutro.interfaces import JobStatus
-from sutro.observability import _traced_run
+from sutro.observability import (
+    _traced_run,
+    _is_langsmith_tracing_enabled,
+    _create_batch_traces,
+    _has_open_batch_traces,
+    _complete_batch_traces,
+)
 from sutro.templates.classification import ClassificationTemplates
 from sutro.templates.embed import EmbeddingTemplates
 from sutro.templates.evals import EvalTemplates
@@ -591,6 +597,8 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
         stay_attached: bool = False,
         job_name: Optional[str] = None,
         description: Optional[str] = None,
+        langsmith_metadata: Optional[Dict[str, Any]] = None,
+        langsmith_tags: Optional[List[str]] = None,
     ):
         """
         Run a Sutro Function on a large table, dataframe, or file using batch processing.
@@ -598,6 +606,10 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
         This is a convenience method for running batch inference with functions. All function
         batch jobs run as priority 1, please use for flex processing endpoint for smaller dataset
         sizes and a more real-time-like experience.
+
+        Automatically traces to LangSmith when LANGSMITH_TRACING=true is set, not a dry run and stay_attached=False.
+        A parent trace is created at job submission time, and child traces (one per row) are added when results
+        are retrieved via get_job_results().
 
         Args:
             name (str): The name of the Sutro Function to use.
@@ -609,16 +621,26 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
             dry_run (bool, optional): If True, return cost estimates instead of running inference.
                 Defaults to False.
             stay_attached (bool, optional): If True, the SDK will stay attached to the job and
-                stream progress updates. Defaults to False.
+                stream progress updates. Not compatible with LangSmith tracing. Defaults to False.
             job_name (str, optional): A job name for experiment/metadata tracking purposes.
                 Defaults to None.
             description (str, optional): A job description for experiment/metadata tracking purposes.
                 Defaults to None.
+            langsmith_metadata (dict, optional): Additional metadata to attach to the LangSmith trace.
+                Only used when tracing is enabled.
+            langsmith_tags (list, optional): Tags to attach to the LangSmith trace for filtering.
+                Only used when tracing is enabled.
 
         Returns:
             str: The ID of the batch job.
         """
         # Convert DataFrames/files to list of dicts for function calls
+        if stay_attached and _is_langsmith_tracing_enabled():
+            raise ValueError(
+                "Attached mode is not compatablie with LangSmith tracing. "
+                "Please set one of stay_attached OR LANGSMITH_TRACING env var."
+            )
+
         if isinstance(data, pd.DataFrame):
             input_data = data.to_dict(orient="records")
         elif isinstance(data, pl.DataFrame):
@@ -642,7 +664,7 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
                 "Parquet or CSV file"
             )
 
-        return self.infer(
+        job_id = self.infer(
             data=input_data,
             model=name,
             name=job_name,
@@ -653,6 +675,23 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
             stay_attached=stay_attached,
             truncate_rows=False,
         )
+
+        if job_id and not dry_run and not stay_attached:
+            traced = _create_batch_traces(
+                function_name=name,
+                job_id=job_id,
+                input_data=input_data,
+                langsmith_metadata=langsmith_metadata,
+                langsmith_tags=langsmith_tags,
+            )
+            if traced:
+                print(
+                    to_colored_text(
+                        f"📊 LangSmith tracing enabled — {len(input_data):,} traces created for {job_id}"
+                    )
+                )
+
+        return job_id
 
     def infer_per_model(
         self,
@@ -1064,23 +1103,37 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
             Union[pl.DataFrame, pd.DataFrame]: The results as a DataFrame. By default, returns polars.DataFrame; when with_original_df is an instance of pandas.DataFrame, returns pandas.DataFrame.
         """
 
-        file_path = os.path.expanduser(f"~/.sutro/job-results/{job_id}.snappy.parquet")
+        cache_file_path = os.path.expanduser(
+            f"~/.sutro/job-results/{job_id}.snappy.parquet"
+        )
         expected_num_columns = 1 + include_inputs + include_cumulative_logprobs
-        contains_expected_columns = False
-        if os.path.exists(file_path):
-            num_columns = pq.read_table(file_path).num_columns
-            contains_expected_columns = num_columns == expected_num_columns
+        cached_contains_expected_columns = False
+        if os.path.exists(cache_file_path):
+            num_columns = pq.read_table(cache_file_path).num_columns
+            cached_contains_expected_columns = num_columns == expected_num_columns
 
-        if disable_cache == False and contains_expected_columns:
+        # Check if open LangSmith traces exist for this job (created at
+        # submission time via batch_run_function). If so, we'll complete
+        # them with outputs once results are available.
+        has_open_traces = _has_open_batch_traces(job_id)
+
+        raw_outputs = None
+        if not disable_cache and cached_contains_expected_columns:
             with yaspin(
                 SPINNER,
-                text=to_colored_text(f"Loading results from cache: {file_path}"),
+                text=to_colored_text(f"Loading results from cache: {cache_file_path}"),
                 color=BASE_OUTPUT_COLOR,
             ) as spinner:
-                results_df = pl.read_parquet(file_path)
+                results_df = pl.read_parquet(cache_file_path)
                 spinner.write(
                     to_colored_text("✔ Results loaded from cache", state="success")
                 )
+                if has_open_traces:
+                    raw_outputs = (
+                        results_df["outputs"].to_list()
+                        if "outputs" in results_df.columns
+                        else None
+                    )
         else:
             payload = {
                 "job_id": job_id,
@@ -1110,13 +1163,28 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
                     print(to_colored_text(e.response.json(), state="fail"))
                     return None
 
+            if has_open_traces:
+                raw_outputs = response_data["results"].get("outputs", [])
+
             results_df = pl.DataFrame(response_data["results"])
+
+        # Complete LangSmith traces with outputs regardless of source is cache or API request
+        if has_open_traces and raw_outputs is not None:
+            print(to_colored_text(f"📊 Completing LangSmith traces for {job_id}..."))
+            job_details = self._fetch_job(job_id)
+            _complete_batch_traces(
+                job_id=job_id,
+                num_rows=len(raw_outputs),
+                outputs=raw_outputs,
+                job_details=job_details,
+            )
+            print(to_colored_text(f"📊 LangSmith traces completed for {job_id}"))
 
             results_df = results_df.rename({"outputs": output_column})
 
             if not disable_cache:
-                os.makedirs(os.path.dirname(file_path), exist_ok=True)
-                results_df.write_parquet(file_path, compression="snappy")
+                os.makedirs(os.path.dirname(cache_file_path), exist_ok=True)
+                results_df.write_parquet(cache_file_path, compression="snappy")
                 spinner.write(
                     to_colored_text("✔ Results saved to cache", state="success")
                 )
