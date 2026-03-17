@@ -1090,28 +1090,37 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
             Union[pl.DataFrame, pd.DataFrame]: The results as a DataFrame. By default, returns polars.DataFrame; when with_original_df is an instance of pandas.DataFrame, returns pandas.DataFrame.
         """
 
-        file_path = os.path.expanduser(f"~/.sutro/job-results/{job_id}.snappy.parquet")
+        cache_file_path = os.path.expanduser(
+            f"~/.sutro/job-results/{job_id}.snappy.parquet"
+        )
         expected_num_columns = 1 + include_inputs + include_cumulative_logprobs
-        contains_expected_columns = False
-        if os.path.exists(file_path):
-            num_columns = pq.read_table(file_path).num_columns
-            contains_expected_columns = num_columns == expected_num_columns
+        cached_contains_expected_columns = False
+        if os.path.exists(cache_file_path):
+            num_columns = pq.read_table(cache_file_path).num_columns
+            cached_contains_expected_columns = num_columns == expected_num_columns
 
         # Check if open LangSmith traces exist for this job (created at
         # submission time via batch_run_function). If so, we'll complete
-        # them with outputs when results are fetched from the API.
-        has_traces = _has_open_batch_traces(job_id)
+        # them with outputs once results are available.
+        has_open_traces = _has_open_batch_traces(job_id)
 
-        if disable_cache == False and contains_expected_columns:
+        raw_outputs = None
+        if not disable_cache and cached_contains_expected_columns:
             with yaspin(
                 SPINNER,
-                text=to_colored_text(f"Loading results from cache: {file_path}"),
+                text=to_colored_text(f"Loading results from cache: {cache_file_path}"),
                 color=BASE_OUTPUT_COLOR,
             ) as spinner:
-                results_df = pl.read_parquet(file_path)
+                results_df = pl.read_parquet(cache_file_path)
                 spinner.write(
                     to_colored_text("✔ Results loaded from cache", state="success")
                 )
+                if has_open_traces:
+                    raw_outputs = (
+                        results_df["outputs"].to_list()
+                        if "outputs" in results_df.columns
+                        else None
+                    )
         else:
             payload = {
                 "job_id": job_id,
@@ -1141,24 +1150,26 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
                     print(to_colored_text(e.response.json(), state="fail"))
                     return None
 
-            # Complete LangSmith traces with outputs if they exist
-            if has_traces:
+            if has_open_traces:
                 raw_outputs = response_data["results"].get("outputs", [])
-                job_details = self._fetch_job(job_id)
-                _complete_batch_traces(
-                    job_id=job_id,
-                    num_rows=len(raw_outputs),
-                    outputs=raw_outputs,
-                    job_details=job_details,
-                )
 
             results_df = pl.DataFrame(response_data["results"])
+
+        # Complete LangSmith traces with outputs regardless of source is cache or API request
+        if has_open_traces and raw_outputs is not None:
+            job_details = self._fetch_job(job_id)
+            _complete_batch_traces(
+                job_id=job_id,
+                num_rows=len(raw_outputs),
+                outputs=raw_outputs,
+                job_details=job_details,
+            )
 
             results_df = results_df.rename({"outputs": output_column})
 
             if not disable_cache:
-                os.makedirs(os.path.dirname(file_path), exist_ok=True)
-                results_df.write_parquet(file_path, compression="snappy")
+                os.makedirs(os.path.dirname(cache_file_path), exist_ok=True)
+                results_df.write_parquet(cache_file_path, compression="snappy")
                 spinner.write(
                     to_colored_text("✔ Results saved to cache", state="success")
                 )
