@@ -26,7 +26,7 @@ from sutro.interfaces import JobStatus
 from sutro.observability import (
     _traced_run,
     _create_batch_traces,
-    _find_batch_parent_trace,
+    _has_open_batch_traces,
     _complete_batch_traces,
 )
 from sutro.templates.classification import ClassificationTemplates
@@ -1097,10 +1097,10 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
             num_columns = pq.read_table(file_path).num_columns
             contains_expected_columns = num_columns == expected_num_columns
 
-        # Check if a parent LangSmith trace exists for this job (created at
-        # submission time via batch_run_function). If so, we'll complete the
-        # child traces with outputs when results are fetched from the API.
-        parent_trace = _find_batch_parent_trace(job_id)
+        # Check if open LangSmith traces exist for this job (created at
+        # submission time via batch_run_function). If so, we'll complete
+        # them with outputs when results are fetched from the API.
+        has_traces = _has_open_batch_traces(job_id)
 
         if disable_cache == False and contains_expected_columns:
             with yaspin(
@@ -1141,13 +1141,12 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
                     print(to_colored_text(e.response.json(), state="fail"))
                     return None
 
-            # Complete LangSmith child traces with outputs if parent trace exists
-            if parent_trace:
+            # Complete LangSmith traces with outputs if they exist
+            if has_traces:
                 raw_outputs = response_data["results"].get("outputs", [])
                 job_details = self._fetch_job(job_id)
                 _complete_batch_traces(
                     job_id=job_id,
-                    parent_trace=parent_trace,
                     num_rows=len(raw_outputs),
                     outputs=raw_outputs,
                     job_details=job_details,
