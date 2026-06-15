@@ -53,8 +53,8 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
     def __init__(
         self,
         api_key: str = None,
-        base_url: str = "https://api.sutro.sh/",
-        serving_base_url: str = "https://serve.sutro.sh/",
+        base_url: str = "https://api.sutro.sh",
+        serving_base_url: str = "https://serve.sutro.sh",
     ):
         self.api_key = api_key or check_for_api_key()
         self.base_url = base_url
@@ -120,7 +120,7 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
             headers.update(kwargs.pop("headers"))
 
         base_url = base_url_override if base_url_override else self.base_url
-        url = f"{base_url}/{endpoint.lstrip('/')}"
+        url = base_url.rstrip("/") + "/" + endpoint.lstrip("/")
 
         # Helper to make the actual HTTP request
         def _make_request():
@@ -442,7 +442,7 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
     def infer(
         self,
         data: Union[List, pd.DataFrame, pl.DataFrame, str],
-        model: ModelOptions = "gemma-3-12b-it",
+        model: ModelOptions = "gpt-oss-20b",
         name: Optional[str] = None,
         description: Optional[str] = None,
         column: Union[str, List[str]] = None,
