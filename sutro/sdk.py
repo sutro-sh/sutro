@@ -1129,9 +1129,11 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
                     to_colored_text("✔ Results loaded from cache", state="success")
                 )
                 if has_open_traces:
+                    # The cache stores the renamed output column, not the raw
+                    # API "outputs" key.
                     raw_outputs = (
-                        results_df["outputs"].to_list()
-                        if "outputs" in results_df.columns
+                        results_df[output_column].to_list()
+                        if output_column in results_df.columns
                         else None
                     )
         else:
@@ -1167,6 +1169,14 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
                 raw_outputs = response_data["results"].get("outputs", [])
 
             results_df = pl.DataFrame(response_data["results"])
+            results_df = results_df.rename({"outputs": output_column})
+
+            if not disable_cache:
+                os.makedirs(os.path.dirname(cache_file_path), exist_ok=True)
+                results_df.write_parquet(cache_file_path, compression="snappy")
+                spinner.write(
+                    to_colored_text("✔ Results saved to cache", state="success")
+                )
 
         # Complete LangSmith traces with outputs regardless of source is cache or API request
         if has_open_traces and raw_outputs is not None:
@@ -1179,15 +1189,6 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
                 job_details=job_details,
             )
             print(to_colored_text(f"📊 LangSmith traces completed for {job_id}"))
-
-            results_df = results_df.rename({"outputs": output_column})
-
-            if not disable_cache:
-                os.makedirs(os.path.dirname(cache_file_path), exist_ok=True)
-                results_df.write_parquet(cache_file_path, compression="snappy")
-                spinner.write(
-                    to_colored_text("✔ Results saved to cache", state="success")
-                )
         # Ordering inputs col first seems most logical/useful
         column_config = [
             ("inputs", include_inputs),
