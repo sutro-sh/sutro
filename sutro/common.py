@@ -8,40 +8,45 @@ from colorama import Fore, Style
 from pydantic import BaseModel
 from tqdm import tqdm
 
-EmbeddingModelOptions = Literal[
-    "qwen-3-embedding-0.6b",
-    "qwen-3-embedding-6b",
-    "qwen-3-embedding-8b",
-]
+# Embedding models available for inference.  Keep in sync with the backend
+# configuration so users get helpful autocompletion when selecting a model.
+EmbeddingModelOptions = (
+    Literal[
+        "embeddinggemma-300m",
+        "qwen-3-embedding-0.6b",
+        "qwen-3-embedding-4b",
+        "qwen-3-embedding-8b",
+    ]
+    | str  # Accept a string here for those running a Function
+)
 
 # Models available for inference.  Keep in sync with the backend configuration
 # so users get helpful autocompletion when selecting a model.
 ModelOptions = (
-    Literal[
-        "llama-3.2-3b",
-        "llama-3.1-8b",
-        "llama-3.3-70b",
-        "llama-3.3-70b",
-        "qwen-3-4b",
-        "qwen-3-14b",
-        "qwen-3-32b",
-        "qwen-3-30b-a3b",
-        "qwen-3-235b-a22b",
-        "qwen-3-4b-thinking",
-        "qwen-3-14b-thinking",
-        "qwen-3-32b-thinking",
-        "qwen-3-235b-a22b-thinking",
-        "qwen-3-30b-a3b-thinking",
-        "gemma-3-4b-it",
-        "gemma-3-12b-it",
-        "gemma-3-27b-it",
+    EmbeddingModelOptions
+    | Literal[
+        "qwen-3.5-2b",
+        "qwen-3.5-2b-thinking",
+        "qwen-3.5-27b",
+        "qwen-3.5-27b-thinking",
+        "qwen-3.5-35b-a3b",
+        "qwen-3.5-35b-a3b-thinking",
+        "qwen-3.5-122b-a10b",
+        "qwen-3.5-122b-a10b-thinking",
         "gpt-oss-20b",
         "gpt-oss-120b",
-        "qwen-3-embedding-0.6b",
-        "qwen-3-embedding-6b",
-        "qwen-3-embedding-8b",
+        "gpt-oss-20b-no-thinking",
+        "gpt-oss-120b-no-thinking",
+        "nemotron-3-super-120b-a12b",
+        "nemotron-3-super-120b-a12b-thinking",
+        "nemotron-3-nano-30b-a3b",
+        "nemotron-3-nano-30b-a3b-thinking",
+        "gemma-4-31b-it",
+        "gemma-4-31b-it-thinking",
+        "gemma-4-26b-a4b-it",
+        "gemma-4-26b-a4b-it-thinking",
     ]
-    | str # Accept a string here for those using running a Function
+    | str  # Accept a string here for those using running a Function
 )
 
 
