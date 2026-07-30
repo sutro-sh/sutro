@@ -192,6 +192,7 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
         truncate_rows: bool,
         name: str,
         description: str,
+        id_column: Optional[str],
     ):
         # Validate name and description lengths
         if name is not None and len(name) > JOB_NAME_CHAR_LIMIT:
@@ -201,6 +202,14 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
         if description is not None and len(description) > JOB_DESCRIPTION_CHAR_LIMIT:
             raise ValueError(
                 f"Job description cannot exceed {JOB_DESCRIPTION_CHAR_LIMIT} characters."
+            )
+
+        if id_column is not None and not (
+            isinstance(data, str)
+            and data.startswith(("https://", "http://"))
+        ):
+            raise ValueError(
+                "id_column is only supported for HTTP(S) download URL inputs."
             )
 
         input_data, column_name = prepare_input_data(data, column)
@@ -219,6 +228,8 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
         }
         if column_name is not None:
             payload["column_name"] = column_name
+        if id_column is not None:
+            payload["id_column_name"] = id_column
 
         # There are two gotchas with yaspin:
         # 1. Can't use print while in spinner is running
@@ -467,6 +478,7 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
         stay_attached: Optional[bool] = None,
         random_seed_per_input: bool = False,
         truncate_rows: bool = True,
+        id_column: Optional[str] = None,
     ):
         """
         Run inference on the provided data.
@@ -490,6 +502,8 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
             stay_attached (bool, optional): If True, the method will stay attached to the job until it is complete. Defaults to True for prototyping jobs, False otherwise.
             random_seed_per_input (bool, optional): If True, the method will use a different random seed for each input. Defaults to False.
             truncate_rows (bool, optional): If True, any rows that have a token count exceeding the context window length of the selected model will be truncated to the max length that will fit within the context window. Defaults to True.
+            id_column (str, optional): ID column to carry into results for
+                HTTP(S) CSV or Parquet download URL inputs. Defaults to None.
 
         Returns:
             str: The ID of the inference job.
@@ -519,6 +533,7 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
             truncate_rows,
             name,
             description,
+            id_column,
         )
 
     def run_function(
@@ -611,6 +626,7 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
         description: Optional[str] = None,
         langsmith_metadata: Optional[Dict[str, Any]] = None,
         langsmith_tags: Optional[List[str]] = None,
+        id_column: Optional[str] = None,
     ):
         """
         Run a Sutro Function on a large table, dataframe, or file using batch processing.
@@ -626,14 +642,16 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
         Args:
             name (str): The name of the Sutro Function to use.
             data (Union[List[dict], pd.DataFrame, pl.DataFrame, str]): The data to run inference on.
-                Accepts a list of dictionaries, a DataFrame, or a path to a parquet/CSV file.
-                Dictionary keys or table columns must match the function's expected schema.
+                Accepts a list of dictionaries, a DataFrame, a path to a parquet/CSV file,
+                or an HTTP(S) download URL. Dictionary keys or table columns must match
+                the function's expected schema.
             output_column (str, optional): The column name to store the inference results.
                 Defaults to "inference_result".
             dry_run (bool, optional): If True, return cost estimates instead of running inference.
                 Defaults to False.
             stay_attached (bool, optional): If True, the SDK will stay attached to the job and
-                stream progress updates. Not compatible with LangSmith tracing. Defaults to False.
+                stream progress updates. Not compatible with HTTP(S) inputs or LangSmith
+                tracing. Defaults to False.
             job_name (str, optional): A job name for experiment/metadata tracking purposes.
                 Defaults to None.
             description (str, optional): A job description for experiment/metadata tracking purposes.
@@ -642,10 +660,20 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
                 Only used when tracing is enabled.
             langsmith_tags (list, optional): Tags to attach to the LangSmith trace for filtering.
                 Only used when tracing is enabled.
+            id_column (str, optional): ID column to carry into results for an
+                HTTP(S) CSV or Parquet download URL. Defaults to None.
 
         Returns:
             str: The ID of the batch job.
         """
+        is_remote_input = isinstance(data, str) and data.startswith(
+            ("https://", "http://")
+        )
+        if stay_attached and is_remote_input:
+            raise ValueError(
+                "stay_attached=True is not supported for HTTP(S) Function inputs."
+            )
+
         # Convert DataFrames/files to list of dicts for function calls
         if stay_attached and _is_langsmith_tracing_enabled():
             raise ValueError(
@@ -658,15 +686,18 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
         elif isinstance(data, pl.DataFrame):
             input_data = data.to_dicts()
         elif isinstance(data, str):
-            file_ext = os.path.splitext(data)[1].lower()
-            if file_ext == ".csv":
-                input_data = pl.read_csv(data).to_dicts()
-            elif file_ext == ".parquet":
-                input_data = pl.read_parquet(data).to_dicts()
+            if is_remote_input:
+                input_data = data
             else:
-                raise ValueError(
-                    f"Unsupported file type: {file_ext}. Use .csv or .parquet"
-                )
+                file_ext = os.path.splitext(data)[1].lower()
+                if file_ext == ".csv":
+                    input_data = pl.read_csv(data).to_dicts()
+                elif file_ext == ".parquet":
+                    input_data = pl.read_parquet(data).to_dicts()
+                else:
+                    raise ValueError(
+                        f"Unsupported file type: {file_ext}. Use .csv or .parquet"
+                    )
         elif isinstance(data, list):
             input_data = data
         else:
@@ -686,9 +717,15 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
             dry_run=dry_run,
             stay_attached=stay_attached,
             truncate_rows=False,
+            id_column=id_column,
         )
 
-        if job_id and not dry_run and not stay_attached:
+        if (
+            job_id
+            and not dry_run
+            and not stay_attached
+            and not isinstance(input_data, str)
+        ):
             traced = _create_batch_traces(
                 function_name=name,
                 job_id=job_id,
@@ -720,6 +757,7 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
         dry_run: bool = False,
         random_seed_per_input: bool = False,
         truncate_rows: bool = True,
+        id_column: Optional[str] = None,
     ):
         """
         Run inference on the provided data, across multiple models. This method is often useful to sampling outputs from multiple models across the same dataset and compare the job_ids.
@@ -742,6 +780,8 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
             stay_attached (bool, optional): If True, the method will stay attached to the job until it is complete. Defaults to True for prototyping jobs, False otherwise.
             random_seed_per_input (bool, optional): If True, the method will use a different random seed for each input. Defaults to False.
             truncate_rows (bool, optional): If True, any rows that have a token count exceeding the context window length of the selected model will be truncated to the max length that will fit within the context window. Defaults to True.
+            id_column (str, optional): ID column to carry into results for
+                HTTP(S) CSV or Parquet download URL inputs. Defaults to None.
 
         Returns:
             str: The ID of the inference job.
@@ -798,6 +838,7 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
                 truncate_rows,
                 name_singleton,
                 description_singleton,
+                id_column,
             )
 
         job_ids = [
@@ -1118,11 +1159,17 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
         cache_file_path = os.path.expanduser(
             f"~/.sutro/job-results/{job_id}.snappy.parquet"
         )
-        expected_num_columns = 1 + include_inputs + include_cumulative_logprobs
+        expected_columns = {output_column}
+        if include_inputs:
+            expected_columns.add("inputs")
+        if include_cumulative_logprobs:
+            expected_columns.add("cumulative_logprobs")
         cached_contains_expected_columns = False
         if os.path.exists(cache_file_path):
-            num_columns = pq.read_table(cache_file_path).num_columns
-            cached_contains_expected_columns = num_columns == expected_num_columns
+            cached_columns = set(pq.read_schema(cache_file_path).names)
+            cached_contains_expected_columns = expected_columns.issubset(
+                cached_columns
+            )
 
         # Check if open LangSmith traces exist for this job (created at
         # submission time via batch_run_function). If so, we'll complete
@@ -1201,9 +1248,20 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
                 job_details=job_details,
             )
             print(to_colored_text(f"📊 LangSmith traces completed for {job_id}"))
-        # Ordering inputs col first seems most logical/useful
+        standard_columns = {
+            "inputs",
+            output_column,
+            "cumulative_logprobs",
+            "confidence_score",
+        }
+        metadata_columns = [
+            column for column in results_df.columns if column not in standard_columns
+        ]
+
+        # Order inputs first, followed by user metadata, output, and diagnostics.
         column_config = [
             ("inputs", include_inputs),
+            *((column, True) for column in metadata_columns),
             (output_column, True),
             ("cumulative_logprobs", include_cumulative_logprobs),
             ("confidence_score", "confidence_score" in results_df.columns),
@@ -1222,35 +1280,44 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
                 first_row = json.loads(
                     results_df.head(1)[output_column][0]
                 )  # checks if the first row can be json decoded
-                results_df = results_df.map_columns(
-                    output_column, lambda s: s.str.json_decode()
-                )
-                results_df = results_df.with_columns(
-                    pl.col(output_column).alias("output_column_json_decoded")
-                )
                 json_decoded_fields = first_row.keys()
-                for field in json_decoded_fields:
-                    results_df = results_df.with_columns(
-                        pl.col("output_column_json_decoded")
-                        .struct.field(field)
-                        .alias(field)
-                    )
-                if sorted(list(set(json_decoded_fields))) == [
-                    "content",
-                    "reasoning_content",
-                ]:  # if it's a reasoning model, we need to unpack the content field
-                    content_keys = results_df.head(1)["content"][0].keys()
-                    for key in content_keys:
-                        results_df = results_df.with_columns(
-                            pl.col("content").struct.field(key).alias(key)
-                        )
-                    results_df = results_df.drop("content")
-                results_df = results_df.drop(
-                    [output_column, "output_column_json_decoded"]
-                )
             except Exception:
                 # if the first row cannot be json decoded, do nothing
                 pass
+            else:
+                conflicting_fields = sorted(
+                    set(json_decoded_fields) & set(results_df.columns)
+                )
+                if conflicting_fields:
+                    raise ValueError(
+                        "Cannot unpack structured output fields that conflict with "
+                        "existing result columns: "
+                        f"{', '.join(conflicting_fields)}. Set unpack_json=False "
+                        "to preserve the metadata and raw structured output."
+                    )
+
+                try:
+                    results_df = results_df.map_columns(
+                        output_column, lambda s: s.str.json_decode()
+                    )
+                    for field in json_decoded_fields:
+                        results_df = results_df.with_columns(
+                            pl.col(output_column).struct.field(field).alias(field)
+                        )
+                    if sorted(list(set(json_decoded_fields))) == [
+                        "content",
+                        "reasoning_content",
+                    ]:  # if it's a reasoning model, we need to unpack the content field
+                        content_keys = results_df.head(1)["content"][0].keys()
+                        for key in content_keys:
+                            results_df = results_df.with_columns(
+                                pl.col("content").struct.field(key).alias(key)
+                            )
+                        results_df = results_df.drop("content")
+                    results_df = results_df.drop(output_column)
+                except Exception:
+                    # if the output column cannot be unpacked, do nothing
+                    pass
 
         # Handle concatenation with original DataFrame
         if with_original_df is not None:
