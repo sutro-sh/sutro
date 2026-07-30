@@ -144,32 +144,37 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
             response.raise_for_status()
             return response
         except requests.HTTPError as e:
-            # Only retry on Cloudflare 524 timeout errors
-            if e.response.status_code == 524:
-                for attempt in range(max_retries):
-                    wait_time = 2**attempt  # Exponential backoff: 1s, 2s, 4s
-                    print(
-                        to_colored_text(
-                            f"⚠️  Cloudflare timeout (524). Retrying in {wait_time}s... (attempt {attempt + 1}/{max_retries})"
-                        )
-                    )
-                    time.sleep(wait_time)
+            status_code = (
+                e.response.status_code if e.response is not None else None
+            )
 
-                    try:
-                        response = _make_request()
-                        response.raise_for_status()
-                        return response
-                    except requests.HTTPError as retry_error:
-                        # If not a 524 or this was the last retry, raise the error
-                        if (
-                            retry_error.response.status_code != 524
-                            or attempt == max_retries - 1
-                        ):
-                            raise
-                        # Otherwise continue to next retry attempt
-            else:
-                # Not a 524 error, raise immediately
+            # Only retry on Cloudflare 524 timeout errors when retries are enabled.
+            if status_code != 524 or max_retries <= 0:
                 raise
+
+            for attempt in range(max_retries):
+                wait_time = 2**attempt  # Exponential backoff: 1s, 2s, 4s
+                retry_message = (
+                    f"⚠️  Cloudflare timeout (524). Retrying in {wait_time}s... "
+                    f"(attempt {attempt + 1}/{max_retries})"
+                )
+                print(to_colored_text(retry_message))
+                time.sleep(wait_time)
+
+                try:
+                    response = _make_request()
+                    response.raise_for_status()
+                    return response
+                except requests.HTTPError as retry_error:
+                    retry_status_code = (
+                        retry_error.response.status_code
+                        if retry_error.response is not None
+                        else None
+                    )
+                    # If not a 524 or this was the last retry, raise the error
+                    if retry_status_code != 524 or attempt == max_retries - 1:
+                        raise
+                    # Otherwise continue to next retry attempt
 
     def _run_one_batch_inference(
         self,
@@ -228,7 +233,14 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
         try:
             with yaspin(SPINNER, text=spinner_text, color=BASE_OUTPUT_COLOR) as spinner:
                 try:
-                    response = self.do_request("POST", "batch-inference", json=payload)
+                    # A 524 does not tell us whether the server created the job.
+                    # Retrying this non-idempotent submission could create duplicates.
+                    response = self.do_request(
+                        "POST",
+                        "batch-inference",
+                        max_retries=0,
+                        json=payload,
+                    )
                     response_data = response.json()
                 except requests.HTTPError as e:
                     response = e.response

@@ -5,6 +5,7 @@ import sys
 import io
 
 import pandas as pd
+import requests
 
 from colorama import Fore, Style
 
@@ -248,6 +249,61 @@ class TestSutro(unittest.TestCase):
         # Test default (blue) state
         default_text = to_colored_text("Default message")
         self.assertEqual(default_text, f"{Fore.BLUE}Default message{Style.RESET_ALL}")
+
+
+class TestRequestRetries(unittest.TestCase):
+    def setUp(self):
+        self.so = Sutro(api_key="test_api_key")
+
+    @patch("requests.post")
+    def test_batch_submission_is_not_retried_after_524(self, mock_post):
+        timeout_response = MagicMock()
+        timeout_response.status_code = 524
+        timeout_response.json.return_value = {"error": "Cloudflare timeout"}
+        timeout_response.raise_for_status.side_effect = requests.HTTPError(
+            response=timeout_response
+        )
+        mock_post.return_value = timeout_response
+
+        result = self.so.infer(["input"], stay_attached=False)
+
+        self.assertIsNone(result)
+        mock_post.assert_called_once()
+
+    @patch("requests.get")
+    def test_zero_retry_budget_reraises_initial_524(self, mock_get):
+        timeout_response = MagicMock()
+        timeout_response.status_code = 524
+        timeout_error = requests.HTTPError(response=timeout_response)
+        timeout_response.raise_for_status.side_effect = timeout_error
+        mock_get.return_value = timeout_response
+
+        with self.assertRaises(requests.HTTPError) as context:
+            self.so.do_request("GET", "job-status/test-job", max_retries=0)
+
+        self.assertIs(context.exception, timeout_error)
+        mock_get.assert_called_once()
+
+    @patch("sutro.sdk.time.sleep")
+    @patch("requests.get")
+    def test_get_request_still_retries_after_524(self, mock_get, mock_sleep):
+        timeout_response = MagicMock()
+        timeout_response.status_code = 524
+        timeout_response.raise_for_status.side_effect = requests.HTTPError(
+            response=timeout_response
+        )
+
+        success_response = MagicMock()
+        success_response.status_code = 200
+        mock_get.side_effect = [timeout_response, success_response]
+
+        result = self.so.do_request(
+            "GET", "job-status/test-job", max_retries=1
+        )
+
+        self.assertIs(result, success_response)
+        self.assertEqual(mock_get.call_count, 2)
+        mock_sleep.assert_called_once_with(1)
 
 
 class TestUserExperience(unittest.TestCase):

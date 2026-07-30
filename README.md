@@ -170,7 +170,7 @@ Sutro supports two Batch priorities today:
 - `job_priority=0`: prototyping jobs for smaller runs and fast iteration
 - `job_priority=1`: production jobs for larger workloads and higher quotas
 
-Before running a large job, use `dry_run=True` to estimate cost.
+Before running a large job, use `dry_run=True` to create an estimate job. The SDK waits for and prints the estimate, then returns its job ID. This does not launch the normal full job, but sufficiently large priority-1 estimates run inference on an approximately 1-million-token prefix sample.
 
 ```python
 import polars as pl
@@ -181,7 +181,7 @@ df = pl.read_parquet(
     "hf://datasets/sutro/synthetic-product-reviews-20k/results.parquet"
 )
 
-estimate = so.infer(
+estimate_job_id = so.infer(
     data=df,
     column="review_text",
     model="gpt-oss-20b",
@@ -189,7 +189,7 @@ estimate = so.infer(
     job_priority=1,
     dry_run=True,
 )
-print(estimate)
+print(estimate_job_id)
 
 job_id = so.infer(
     data=df,
@@ -198,13 +198,18 @@ job_id = so.infer(
     system_prompt="Summarize the review in one sentence.",
     job_priority=1,
     name="review-summary-prod",
+    stay_attached=False,
 )
+
+so.await_job_completion(job_id, obtain_results=False)
+if so.get_job_status(job_id) != "SUCCEEDED":
+    raise RuntimeError("Job did not complete successfully")
 
 results = so.get_job_results(job_id, include_inputs=True)
 print(results.head())
 ```
 
-You can monitor live progress, inspect samples, tag jobs, and share results from the Sutro web app.
+The result helper above is convenient for manageable result sets. For large production results, use the resumable Parquet results-download workflow in the [Batch documentation](https://docs.sutro.sh/batch-api-reference/job-results-url). You can also monitor live progress, inspect samples, tag jobs, and share results from the Sutro web app.
 
 ![Production Job Result](./assets/webui.gif)
 
@@ -276,6 +281,7 @@ sutro quotas
 - [Quickstart](https://docs.sutro.sh/quickstart)
 - [Sutro Functions](https://docs.sutro.sh/sutro-functions)
 - [Python SDK: Batch Inference](https://docs.sutro.sh/python-sdk/batch-inference)
+- [Production Batch Inputs from S3](https://docs.sutro.sh/python-sdk/presigned-s3-inputs)
 - [Python SDK: Functions](https://docs.sutro.sh/python-sdk/functions)
 - [Models and Pricing](https://sutro.sh/pricing)
 - [Synthetic Data Zero to Hero](https://docs.sutro.sh/examples/synthetic-data-zero-to-hero)
