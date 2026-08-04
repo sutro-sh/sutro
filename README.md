@@ -33,7 +33,7 @@ Typical Functions include:
 
 ### Sutro Batch
 
-Sutro Batch is serverless async inference for high-volume AI workloads. Run Sutro Functions, custom models, or pre-trained open-source LLMs over large datasets with simple usage-based pricing, DataFrame-friendly inputs and outputs, live observability, and result downloads.
+Sutro Batch is serverless async inference for high-volume AI workloads. Run Sutro Functions or pre-trained open-source LLMs over large datasets with simple usage-based pricing, DataFrame-friendly inputs and outputs, live observability, and result downloads.
 
 Batch is best when latency is less important than quality, cost, throughput, and reproducibility.
 
