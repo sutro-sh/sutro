@@ -38,6 +38,10 @@ from sutro.validation import check_version, check_for_api_key
 JOB_NAME_CHAR_LIMIT = 45
 JOB_DESCRIPTION_CHAR_LIMIT = 512
 
+# (connect, read) timeouts for direct requests to presigned URLs. The read
+# timeout bounds inactivity between streamed chunks, not the whole download.
+DOWNLOAD_REQUEST_TIMEOUT = (10, 120)
+
 # Initialize colorama (required for Windows)
 init()
 
@@ -484,14 +488,14 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
         Run inference on the provided data.
 
         This method allows you to run inference on the provided data using the Sutro API.
-        It supports various data types such as lists, DataFrames (Polars or Pandas), file paths and datasets.
+        It supports various data types such as lists, DataFrames (Polars or Pandas), file paths and download URLs.
 
         Args:
             data (Union[List, pd.DataFrame, pl.DataFrame, str]): The data to run inference on.
             model (ModelOptions, optional): The model to use for inference. Defaults to "gemma-3-12b-it".
             name (str, optional): A job name for experiment/metadata tracking purposes. Defaults to None.
             description (str, optional): A job description for experiment/metadata tracking purposes. Defaults to None.
-            column (Union[str, List[str]], optional): The column name to use for inference. Required if data is a DataFrame, file path, or dataset. If a list is supplied, it will concatenate the columns of the list into a single column, accepting separator strings.
+            column (Union[str, List[str]], optional): The column name to use for inference. Required if data is a DataFrame or file path. If a list is supplied, it will concatenate the columns of the list into a single column, accepting separator strings.
             output_column (str, optional): The column name to store the inference results in if the input is a DataFrame. Defaults to "inference_result".
             job_priority (int, optional): The priority of the job. Defaults to 0.
             output_schema (Union[Dict[str, Any], BaseModel], optional): A structured schema for the output.
@@ -760,16 +764,16 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
         id_column: Optional[str] = None,
     ):
         """
-        Run inference on the provided data, across multiple models. This method is often useful to sampling outputs from multiple models across the same dataset and compare the job_ids.
+        Run inference on the provided data, across multiple models. This method is often useful to sampling outputs from multiple models across the same data and compare the job_ids.
 
-        For input data, it supports various data types such as lists, DataFrames (Polars or Pandas), file paths and datasets.
+        For input data, it supports various data types such as lists, DataFrames (Polars or Pandas), file paths and download URLs.
 
         Args:
             data (Union[List, pd.DataFrame, pl.DataFrame, str]): The data to run inference on.
-            models (Union[ModelOptions, List[ModelOptions]], optional): The models to use for inference. Fans out each model to its own seperate job, over the same dataset.
+            models (Union[ModelOptions, List[ModelOptions]], optional): The models to use for inference. Fans out each model to its own seperate job, over the same data.
             names (Union[str, List[str]], optional): A job name for experiment/metadata tracking purposes. If using a list of models, you must pass a list of names with length equal to the number of models, or None. Defaults to None.
             descriptions (Union[str, List[str]], optional): A job description for experiment/metadata tracking purposes. If using a list of models, you must pass a list of descriptions with length equal to the number of models, or None. Defaults to None.
-            column (Union[str, List[str]], optional): The column name to use for inference. Required if data is a DataFrame, file path, or dataset. If a list is supplied, it will concatenate the columns of the list into a single column, accepting separator strings.
+            column (Union[str, List[str]], optional): The column name to use for inference. Required if data is a DataFrame or file path. If a list is supplied, it will concatenate the columns of the list into a single column, accepting separator strings.
             output_column (str, optional): The column name to store the inference job_ids in if the input is a DataFrame. Defaults to "inference_result".
             job_priority (int, optional): The priority of the job. Defaults to 0.
             output_schema (Union[Dict[str, Any], BaseModel], optional): A structured schema for the output.
@@ -1339,6 +1343,260 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
 
         return results_df
 
+    def results_download_url(
+        self,
+        job_id: str,
+        include_inputs: bool = False,
+        include_cumulative_logprobs: bool = False,
+        expires_in_seconds: int = 3600,
+    ) -> Optional[dict]:
+        """
+        Get presigned download URLs for a job's results artifact.
+
+        The backend materializes (or reuses) a single Parquet artifact
+        containing the job's results and returns presigned URLs for it.
+        Useful when you want to hand the download off to another system,
+        issue partial Range reads, or download from a different machine.
+        To simply save the results locally, use `download_job_results()`.
+
+        Args:
+            job_id (str): The ID of the job to retrieve results for.
+            include_inputs (bool, optional): Whether to include the inputs in the results. Defaults to False.
+            include_cumulative_logprobs (bool, optional): Whether to include the cumulative logprobs in the results. Defaults to False.
+            expires_in_seconds (int, optional): How long the presigned URLs remain valid, up to 7 days. Defaults to 3600 (1 hour).
+
+        Returns:
+            Optional[dict]: Payload with `artifact` metadata (`filename`, `size_bytes`, ...) and presigned
+            `urls` (`get` for downloading, `head` for metadata). The `get` URL supports HTTP Range
+            requests. Returns None if the request fails.
+        """
+        with yaspin(
+            SPINNER,
+            text=to_colored_text(f"Preparing results download for job: {job_id}"),
+            color=BASE_OUTPUT_COLOR,
+        ) as spinner:
+            try:
+                response = self.do_request(
+                    "GET",
+                    f"jobs/{job_id}/results-url",
+                    params={
+                        "format": "parquet",
+                        "include_inputs": include_inputs,
+                        "include_cumulative_logprobs": include_cumulative_logprobs,
+                        "expires_in_seconds": expires_in_seconds,
+                    },
+                )
+                spinner.write(
+                    to_colored_text("✔ Results download URL ready", state="success")
+                )
+                return response.json()
+            except requests.HTTPError as e:
+                spinner.write(
+                    to_colored_text(
+                        f"Bad status code: {e.response.status_code}", state="fail"
+                    )
+                )
+                spinner.stop()
+                try:
+                    detail = e.response.json()
+                except ValueError:
+                    # Intermediaries (e.g. Cloudflare) return HTML error pages.
+                    detail = e.response.text
+                print(to_colored_text(detail, state="fail"))
+                return None
+            except requests.RequestException as e:
+                spinner.write(to_colored_text(f"Request failed: {e}", state="fail"))
+                return None
+
+    def download_job_results(
+        self,
+        job_id: str,
+        output_path: Optional[str] = None,
+        include_inputs: bool = False,
+        include_cumulative_logprobs: bool = False,
+        resume: bool = True,
+        expires_in_seconds: int = 3600,
+    ) -> Optional[str]:
+        """
+        Download a job's results as a Parquet file on local disk.
+
+        Fetches presigned download URLs via `results_download_url()` and
+        streams the artifact to disk with a progress bar. An interrupted
+        download leaves a `.part` file behind; when `resume` is True,
+        rerunning picks up where it left off via an HTTP Range request,
+        as long as the artifact is unchanged server-side (validated by
+        ETag). If the artifact changed, or the server doesn't expose an
+        ETag to validate against, the download restarts from scratch.
+
+        Args:
+            job_id (str): The ID of the job to download results for.
+            output_path (str, optional): Where to write the Parquet file. May be a directory
+                (the server-provided artifact filename is used) or a full file path.
+                Defaults to the artifact filename in the current directory.
+            include_inputs (bool, optional): Whether to include the inputs in the results. Defaults to False.
+            include_cumulative_logprobs (bool, optional): Whether to include the cumulative logprobs in the results. Defaults to False.
+            resume (bool, optional): Whether to resume a partial download if one exists. Defaults to True.
+            expires_in_seconds (int, optional): How long the presigned URLs remain valid, up to 7 days. Defaults to 3600 (1 hour).
+
+        Returns:
+            Optional[str]: The local path of the downloaded Parquet file, ready for
+            `pl.read_parquet()`. Returns None if the request fails.
+        """
+        payload = self.results_download_url(
+            job_id,
+            include_inputs=include_inputs,
+            include_cumulative_logprobs=include_cumulative_logprobs,
+            expires_in_seconds=expires_in_seconds,
+        )
+        if payload is None:
+            return None
+
+        filename = payload["artifact"]["filename"]
+        if output_path is None:
+            destination = filename
+        elif output_path.endswith(("/", os.sep)) or os.path.isdir(output_path):
+            os.makedirs(output_path, exist_ok=True)
+            destination = os.path.join(output_path, filename)
+        else:
+            destination = output_path
+            parent_dir = os.path.dirname(destination)
+            if parent_dir:
+                os.makedirs(parent_dir, exist_ok=True)
+
+        part_path = destination + ".part"
+        etag_path = destination + ".part.etag"
+
+        try:
+            head_response = requests.head(
+                payload["urls"]["head"], timeout=DOWNLOAD_REQUEST_TIMEOUT
+            )
+            head_response.raise_for_status()
+            # Some S3-compatible gateways omit ETag; without one, resume
+            # can't be validated and the download restarts from scratch.
+            etag = head_response.headers.get("ETag")
+            total_bytes = int(head_response.headers["Content-Length"])
+
+            start_byte = 0
+            if (
+                resume
+                and etag
+                and os.path.exists(part_path)
+                and os.path.exists(etag_path)
+            ):
+                with open(etag_path) as f:
+                    stored_etag = f.read()
+                part_size = os.path.getsize(part_path)
+                if stored_etag == etag and part_size <= total_bytes:
+                    start_byte = part_size
+
+            if start_byte == 0 and os.path.exists(part_path):
+                # Discard a stale partial before stamping the new ETag so a
+                # failed download can't later resume-append bytes from a
+                # different artifact onto it.
+                os.remove(part_path)
+
+            if etag:
+                with open(etag_path, "w") as f:
+                    f.write(etag)
+            elif os.path.exists(etag_path):
+                os.remove(etag_path)
+
+            while start_byte < total_bytes:
+                headers = None
+                if start_byte > 0:
+                    # If-Range makes the server return the full body instead
+                    # of the requested range if the artifact was replaced
+                    # after the HEAD check above.
+                    headers = {"Range": f"bytes={start_byte}-", "If-Range": etag}
+                with requests.get(
+                    payload["urls"]["get"],
+                    headers=headers,
+                    stream=True,
+                    timeout=DOWNLOAD_REQUEST_TIMEOUT,
+                ) as response:
+                    response.raise_for_status()
+                    if start_byte > 0 and response.status_code != 206:
+                        # If-Range mismatch or ignored Range: this response is
+                        # the full body of the current artifact, so stream it
+                        # from scratch instead of appending.
+                        start_byte = 0
+                    elif (
+                        start_byte > 0
+                        and response.headers.get("ETag", etag) != etag
+                    ):
+                        # A 206 for a replaced object; re-request in full.
+                        start_byte = 0
+                        continue
+                    if start_byte == 0:
+                        # The response is authoritative for the object being
+                        # streamed: after a restart, validate against the
+                        # replacement's metadata rather than the stale HEAD.
+                        etag = response.headers.get("ETag", etag)
+                        if "Content-Length" in response.headers:
+                            total_bytes = int(response.headers["Content-Length"])
+                        if etag:
+                            with open(etag_path, "w") as f:
+                                f.write(etag)
+                    with (
+                        open(part_path, "ab" if start_byte > 0 else "wb") as f,
+                        tqdm(
+                            total=total_bytes,
+                            initial=start_byte,
+                            unit="B",
+                            unit_scale=True,
+                            unit_divisor=1024,
+                            desc=to_colored_text(f"Downloading {filename}"),
+                            colour=BASE_OUTPUT_COLOR,
+                        ) as pbar,
+                    ):
+                        for chunk in response.iter_content(
+                            chunk_size=8 * 1024 * 1024
+                        ):
+                            f.write(chunk)
+                            pbar.update(len(chunk))
+                break
+        except requests.HTTPError as e:
+            print(
+                to_colored_text(
+                    f"Download failed with status code: {e.response.status_code}",
+                    state="fail",
+                )
+            )
+            return None
+        except requests.RequestException as e:
+            # Mid-stream failures (connection resets, read timeouts) leave the
+            # .part file in place; rerunning resumes from where it left off.
+            # Only the exception type is printed: str(e) embeds the request
+            # URL, and presigned query params grant access to the results.
+            print(
+                to_colored_text(
+                    f"Download interrupted ({type(e).__name__}); rerun to resume.",
+                    state="fail",
+                )
+            )
+            return None
+
+        # A stream can end cleanly but short (e.g. an ETag-less gateway
+        # serving a replaced object); never publish a truncated file.
+        part_size = os.path.getsize(part_path)
+        if part_size != total_bytes:
+            print(
+                to_colored_text(
+                    f"Download incomplete ({part_size} of {total_bytes} bytes); "
+                    "rerun to retry.",
+                    state="fail",
+                )
+            )
+            return None
+
+        os.replace(part_path, destination)
+        if etag:
+            os.remove(etag_path)
+        print(
+            to_colored_text(f"✔ Results downloaded to {destination}", state="success")
+        )
+        return destination
+
     def cancel_job(self, job_id: str):
         """
         Cancel a job by its ID.
@@ -1365,235 +1623,6 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
                 spinner.stop()
                 print(to_colored_text(e.response.json(), state="fail"))
                 return None
-
-    def create_dataset(self):
-        """
-        Create a new dataset.
-
-        This method creates a new empty dataset and returns its ID.
-
-        Returns:
-            str: The ID of the new dataset.
-        """
-        with yaspin(
-            SPINNER, text=to_colored_text("Creating dataset"), color=BASE_OUTPUT_COLOR
-        ) as spinner:
-            try:
-                response = self.do_request("GET", "create-dataset")
-                dataset_id = response.json()["dataset_id"]
-                spinner.write(
-                    to_colored_text(
-                        f"✔ Dataset created with ID: {dataset_id}", state="success"
-                    )
-                )
-                return dataset_id
-            except requests.HTTPError as e:
-                spinner.write(
-                    to_colored_text(
-                        f"Bad status code: {e.response.status_code}", state="fail"
-                    )
-                )
-                spinner.stop()
-                print(to_colored_text(e.response.json(), state="fail"))
-                return None
-
-    def upload_to_dataset(
-        self,
-        dataset_id: Union[List[str], str] = None,
-        file_paths: Union[List[str], str] = None,
-        verify_ssl: bool = True,
-    ):
-        """
-        Upload data to a dataset.
-
-        This method uploads files to a dataset. Accepts a dataset ID and file paths. If only a single parameter is provided, it will be interpreted as the file paths.
-
-        Args:
-            dataset_id (str): The ID of the dataset to upload to. If not provided, a new dataset will be created.
-            file_paths (Union[List[str], str]): A list of paths to the files to upload, or a single path to a collection of files.
-            verify_ssl (bool): Whether to verify SSL certificates. Set to False to bypass SSL verification for troubleshooting.
-
-        Returns:
-            dict: The response from the API.
-        """
-        # when only a single parameter is provided, it is interpreted as the file paths
-        if file_paths is None and dataset_id is not None:
-            file_paths = dataset_id
-            dataset_id = None
-
-        if file_paths is None:
-            raise ValueError("File paths must be provided")
-
-        if dataset_id is None:
-            dataset_id = self.create_dataset()
-
-        if isinstance(file_paths, str):
-            # check if the file path is a directory
-            if os.path.isdir(file_paths):
-                file_paths = [
-                    os.path.join(file_paths, f) for f in os.listdir(file_paths)
-                ]
-                if len(file_paths) == 0:
-                    raise ValueError("No files found in the directory")
-            else:
-                file_paths = [file_paths]
-
-        with yaspin(
-            SPINNER,
-            text=to_colored_text(f"Uploading files to dataset: {dataset_id}"),
-            color=BASE_OUTPUT_COLOR,
-        ) as spinner:
-            count = 0
-            for file_path in file_paths:
-                file_name = os.path.basename(file_path)
-
-                files = {
-                    "file": (
-                        file_name,
-                        open(file_path, "rb"),
-                        "application/octet-stream",
-                    )
-                }
-
-                payload = {
-                    "dataset_id": dataset_id,
-                }
-
-                count += 1
-                spinner.write(
-                    to_colored_text(
-                        f"Uploading file {count}/{len(file_paths)} to dataset: {dataset_id}"
-                    )
-                )
-
-                try:
-                    self.do_request(
-                        "POST",
-                        "/upload-to-dataset",
-                        data=payload,
-                        files=files,
-                        verify=verify_ssl,
-                    )
-                except requests.exceptions.RequestException as e:
-                    # Stop spinner before showing error to avoid terminal width error
-                    spinner.stop()
-                    print(to_colored_text(f"Upload failed: {str(e)}", state="fail"))
-                    return None
-
-            spinner.write(
-                to_colored_text(
-                    f"✔ {count} files successfully uploaded to dataset", state="success"
-                )
-            )
-        return dataset_id
-
-    def list_datasets(self):
-        with yaspin(
-            SPINNER,
-            text=to_colored_text("Retrieving datasets"),
-            color=BASE_OUTPUT_COLOR,
-        ) as spinner:
-            try:
-                response = self.do_request("POST", "list-datasets")
-                spinner.write(to_colored_text("✔ Datasets retrieved", state="success"))
-                return response.json()["datasets"]
-            except requests.HTTPError as e:
-                spinner.fail(
-                    to_colored_text(
-                        f"Bad status code: {e.response.status_code}", state="fail"
-                    )
-                )
-                print(to_colored_text(f"Error: {e.response.json()}", state="fail"))
-                return None
-
-    def list_dataset_files(self, dataset_id: str):
-        payload = {
-            "dataset_id": dataset_id,
-        }
-        with yaspin(
-            SPINNER,
-            text=to_colored_text(f"Listing files in dataset: {dataset_id}"),
-            color=BASE_OUTPUT_COLOR,
-        ) as spinner:
-            try:
-                response = self.do_request("POST", "list-dataset-files", json=payload)
-                spinner.write(
-                    to_colored_text(
-                        f"✔ Files listed in dataset: {dataset_id}", state="success"
-                    )
-                )
-                return response.json()["files"]
-            except requests.HTTPError as e:
-                spinner.fail(
-                    to_colored_text(
-                        f"Bad status code: {e.response.status_code}", state="fail"
-                    )
-                )
-                print(to_colored_text(f"Error: {e.response.json()}", state="fail"))
-                return None
-
-    def download_from_dataset(
-        self,
-        dataset_id: str,
-        files: Union[List[str], str] = None,
-        output_path: str = None,
-    ):
-        if files is None:
-            files = self.list_dataset_files(dataset_id)
-        elif isinstance(files, str):
-            files = [files]
-
-        if not files:
-            print(
-                to_colored_text(
-                    f"Couldn't find files for dataset ID: {dataset_id}", state="fail"
-                )
-            )
-            return
-
-        # if no output path is provided, save the files to the current working directory
-        if output_path is None:
-            output_path = os.getcwd()
-
-        with yaspin(
-            SPINNER,
-            text=to_colored_text(f"Downloading files from dataset: {dataset_id}"),
-            color=BASE_OUTPUT_COLOR,
-        ) as spinner:
-            count = 0
-            for file in files:
-                spinner.text = to_colored_text(
-                    f"Downloading file {count + 1}/{len(files)} from dataset: {dataset_id}"
-                )
-
-                try:
-                    payload = {
-                        "dataset_id": dataset_id,
-                        "file_name": file,
-                    }
-                    response = self.do_request(
-                        "POST", "download-from-dataset", json=payload
-                    )
-
-                    file_content = response.content
-                    with open(os.path.join(output_path, file), "wb") as f:
-                        f.write(file_content)
-
-                    count += 1
-                except requests.HTTPError as e:
-                    spinner.fail(
-                        to_colored_text(
-                            f"Bad status code: {e.response.status_code}", state="fail"
-                        )
-                    )
-                    print(to_colored_text(f"Error: {e.response.json()}", state="fail"))
-                    return
-            spinner.write(
-                to_colored_text(
-                    f"✔ {count} files successfully downloaded from dataset: {dataset_id}",
-                    state="success",
-                )
-            )
 
     def try_authentication(self, api_key: str):
         """

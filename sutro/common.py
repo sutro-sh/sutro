@@ -120,7 +120,7 @@ def prepare_input_data(
 
     Returns ``(input_data, column_name)`` where *column_name* is set only
     when the API should receive it as a separate ``column_name`` field (i.e.
-    for dataset references).  For all other input types the column is resolved
+    for download URLs).  For all other input types the column is resolved
     client-side and *column_name* is ``None``.
     """
     if isinstance(data, list):
@@ -133,14 +133,13 @@ def prepare_input_data(
         elif isinstance(column, str):
             input_data = data[column].to_list()
     elif isinstance(data, str):
-        if data.startswith("dataset-"):
-            if not isinstance(column, str) or len(column.strip()) == 0:
-                raise ValueError(
-                    "Column name must be a non-empty string for dataset input"
-                )
+        if data.startswith("https://") or data.startswith("http://"):
             return data, column
-        elif data.startswith("https://") or data.startswith("http://"):
-            return data, column
+        elif data.startswith("dataset-"):
+            raise ValueError(
+                "Sutro datasets have been removed. Pass a download URL "
+                "(e.g. a presigned S3 URL) or a local file path instead."
+            )
         else:
             file_ext = os.path.splitext(data)[1].lower()
             if file_ext == ".csv":

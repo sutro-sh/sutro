@@ -1,8 +1,11 @@
 import unittest
 import time
 from unittest.mock import patch, MagicMock, mock_open
+import os
+import shutil
 import sys
 import io
+import tempfile
 
 import pandas as pd
 import requests
@@ -164,78 +167,6 @@ class TestSutro(unittest.TestCase):
         output = self.stdout_capture.getvalue()
         self.assertIn("✔ Job cancelled", output)
 
-    @patch("requests.get")
-    def test_create_dataset_success(self, mock_get):
-        # Mock successful response
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.json.return_value = {"dataset_id": "test_dataset_id"}
-        mock_get.return_value = mock_response
-
-        # Call the method
-        result = self.so.create_dataset()
-
-        # Verify results
-        self.assertEqual(result, "test_dataset_id")
-
-        # Check output for success message
-        output = self.stdout_capture.getvalue()
-        self.assertIn("✔ Dataset created with ID: test_dataset_id", output)
-
-    @patch("requests.post")
-    @patch("os.path.isdir")
-    @patch("os.listdir")
-    @patch("os.path.basename")
-    @patch("builtins.open")
-    @patch("sutro.Sutro.create_dataset")
-    def test_upload_to_dataset_success(
-        self,
-        mock_create_dataset,
-        mock_open,
-        mock_basename,
-        mock_listdir,
-        mock_isdir,
-        mock_post,
-    ):
-        # Mock necessary functions
-        mock_create_dataset.return_value = "new_dataset_id"
-        mock_isdir.return_value = False
-        mock_basename.return_value = "test_file.csv"
-        mock_open.return_value = MagicMock()
-
-        # Mock successful response
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_post.return_value = mock_response
-
-        # Call the method with single file
-        result = self.so.upload_to_dataset("test_dataset_id", "test_file.csv")
-
-        # Verify results
-        self.assertEqual(result, "test_dataset_id")
-
-        # Check output for success message
-        output = self.stdout_capture.getvalue()
-        self.assertIn("✔ 1 files successfully uploaded to dataset", output)
-
-    @patch("requests.post")
-    def test_list_datasets_success(self, mock_post):
-        # Mock successful response
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.json.return_value = {"datasets": ["dataset1", "dataset2"]}
-        mock_post.return_value = mock_response
-
-        # Call the method
-        result = self.so.list_datasets()
-
-        # Verify results
-        self.assertEqual(result, ["dataset1", "dataset2"])
-
-        # Check output for success message
-        output = self.stdout_capture.getvalue()
-        self.assertIn("✔ Datasets retrieved", output)
-
     # Test for color output formatting
     def test_to_colored_text(self):
         # Test success state
@@ -388,35 +319,6 @@ class TestUserExperience(unittest.TestCase):
             self.so.infer(df)
 
         self.assertIn("Column name must be specified", str(context.exception))
-
-    @patch("requests.post")
-    @patch.object(Sutro, "create_dataset")
-    @patch("os.path.isdir")
-    @patch("os.listdir")
-    @patch("builtins.open", new_callable=mock_open, read_data="test data")
-    def test_multi_file_upload_progress(
-        self, mock_file, mock_listdir, mock_isdir, mock_create_dataset, mock_post
-    ):
-        """Test that users see progress during multi-file uploads"""
-        # Setup for multiple files
-        mock_isdir.return_value = True
-        mock_listdir.return_value = ["file1.txt", "file2.txt", "file3.txt"]
-        mock_create_dataset.return_value = "test_dataset_id"
-
-        # Mock successful response
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_post.return_value = mock_response
-
-        # Call the method
-        self.so.upload_to_dataset("/fake/directory")
-
-        # Check output for file upload progress indicators
-        output = self.get_captured_output()
-        self.assertIn("Uploading file 1/3", output)
-        self.assertIn("Uploading file 2/3", output)
-        self.assertIn("Uploading file 3/3", output)
-        self.assertIn("✔ 3 files successfully uploaded", output)
 
     @patch("requests.post")
     def test_priority_job_feedback(self, mock_post):
@@ -639,51 +541,6 @@ class TestColorFormatting(unittest.TestCase):
         )
 
     @patch("requests.post")
-    def test_dataset_upload_progress_colors(self, mock_post):
-        """Test color formatting during file upload progress"""
-        # Setup mocks
-        with patch("os.path.isdir") as mock_isdir, patch(
-            "os.listdir"
-        ) as mock_listdir, patch("os.path.basename") as mock_basename, patch(
-            "builtins.open"
-        ) as mock_open, patch.object(
-            Sutro, "create_dataset"
-        ) as mock_create_dataset:
-            # Configure mocks
-            mock_create_dataset.return_value = "test_dataset_id"
-            mock_isdir.return_value = True
-            mock_listdir.return_value = ["file1.txt", "file2.txt"]
-            mock_basename.side_effect = lambda x: x
-            mock_open.return_value = MagicMock()
-
-            # Mock successful response
-            mock_response = MagicMock()
-            mock_response.status_code = 200
-            mock_post.return_value = mock_response
-
-            # Call the method
-            self.so.upload_to_dataset("/fake/dir/")
-
-            # Get output and check color formatting
-            output = self.get_captured_output()
-
-            # Progress messages should be blue
-            self.assert_colored_text_in_output(
-                "Uploading files to dataset: test_dataset_id", Fore.BLUE, output
-            )
-            self.assert_colored_text_in_output(
-                "Uploading file 1/2 to dataset: test_dataset_id", Fore.BLUE, output
-            )
-            self.assert_colored_text_in_output(
-                "Uploading file 2/2 to dataset: test_dataset_id", Fore.BLUE, output
-            )
-
-            # Success message should be green
-            self.assert_colored_text_in_output(
-                "✔ 2 files successfully uploaded to dataset", Fore.GREEN, output
-            )
-
-    @patch("requests.post")
     def test_job_priority_message_colors(self, mock_post):
         """Test color formatting for priority job messages"""
         # Mock response for priority job
@@ -724,30 +581,6 @@ class TestColorFormatting(unittest.TestCase):
         # Auth failure should be red
         self.assert_colored_text_in_output(
             "API key failed to authenticate: 401", Fore.RED, output
-        )
-
-    @patch("requests.post")
-    def test_network_error_colors(self, mock_post):
-        """Test color formatting for network error messages"""
-        # Mock network error
-        mock_post.side_effect = Exception("Connection error")
-
-        # Patch upload_to_dataset to handle the exception
-        with patch.object(
-            Sutro,
-            "upload_to_dataset",
-            side_effect=lambda *a, **kw: print(
-                to_colored_text("Upload failed: Connection error", state="fail")
-            ),
-        ):
-            self.so.upload_to_dataset("test_dataset", "test_file.txt")
-
-        # Get output and check color formatting
-        output = self.get_captured_output()
-
-        # Network error should be red
-        self.assert_colored_text_in_output(
-            "Upload failed: Connection error", Fore.RED, output
         )
 
     @patch("requests.post")
@@ -841,23 +674,440 @@ class TestColorFormatting(unittest.TestCase):
 
 
 class TestPrepareInputData(unittest.TestCase):
-    def test_dataset_requires_non_empty_string_column(self):
-        with self.assertRaises(ValueError):
-            prepare_input_data("dataset-123", None)
-
-        with self.assertRaises(ValueError):
-            prepare_input_data("dataset-123", "")
-
-        with self.assertRaises(ValueError):
-            prepare_input_data("dataset-123", "   ")
-
-        with self.assertRaises(ValueError):
-            prepare_input_data("dataset-123", ["text"])
-
-    def test_dataset_with_valid_column(self):
-        input_data, column_name = prepare_input_data("dataset-123", "text")
-        self.assertEqual(input_data, "dataset-123")
+    def test_download_url_passes_through_with_column(self):
+        input_data, column_name = prepare_input_data(
+            "https://example.com/data.parquet", "text"
+        )
+        self.assertEqual(input_data, "https://example.com/data.parquet")
         self.assertEqual(column_name, "text")
+
+    def test_legacy_dataset_id_rejected_with_clear_error(self):
+        with self.assertRaises(ValueError) as ctx:
+            prepare_input_data(
+                "dataset-123e4567-e89b-12d3-a456-426614174000", "text"
+            )
+        self.assertIn("datasets have been removed", str(ctx.exception))
+
+
+class TestPresignedResultsDownload(unittest.TestCase):
+    def setUp(self):
+        self.so = Sutro(api_key="test_api_key")
+
+        self.stdout_capture = io.StringIO()
+        self.old_stdout = sys.stdout
+        sys.stdout = self.stdout_capture
+
+        self.tmpdir = tempfile.mkdtemp()
+
+        self.payload = {
+            "job_id": "test-job",
+            "format": "parquet",
+            "artifact": {
+                "bucket": "test-bucket",
+                "key": "results/test-job.parquet",
+                "filename": "test-job.parquet",
+                "size_bytes": 10,
+            },
+            "urls": {
+                "get": "https://r2.example.com/get",
+                "head": "https://r2.example.com/head",
+            },
+        }
+
+    def tearDown(self):
+        sys.stdout = self.old_stdout
+        shutil.rmtree(self.tmpdir)
+
+    @staticmethod
+    def make_head_response(etag='"abc123"', content_length=10):
+        response = MagicMock()
+        response.headers = {"Content-Length": str(content_length)}
+        if etag is not None:
+            response.headers["ETag"] = etag
+        return response
+
+    @staticmethod
+    def make_get_response(body, status_code=200, headers=None):
+        response = MagicMock()
+        response.status_code = status_code
+        response.headers = headers or {}
+        response.iter_content.return_value = [body]
+        response.__enter__.return_value = response
+        return response
+
+    @patch("requests.get")
+    def test_results_download_url_success(self, mock_get):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = self.payload
+        mock_get.return_value = mock_response
+
+        result = self.so.results_download_url(
+            "test-job", include_inputs=True, expires_in_seconds=600
+        )
+
+        self.assertEqual(result, self.payload)
+        url = mock_get.call_args.args[0]
+        params = mock_get.call_args.kwargs["params"]
+        self.assertIn("jobs/test-job/results-url", url)
+        self.assertEqual(params["format"], "parquet")
+        self.assertTrue(params["include_inputs"])
+        self.assertFalse(params["include_cumulative_logprobs"])
+        self.assertEqual(params["expires_in_seconds"], 600)
+
+    @patch("requests.get")
+    def test_results_download_url_failure(self, mock_get):
+        mock_response = MagicMock()
+        mock_response.status_code = 404
+        mock_response.json.return_value = {"detail": "Job not found"}
+        mock_response.raise_for_status.side_effect = requests.HTTPError(
+            response=mock_response
+        )
+        mock_get.return_value = mock_response
+
+        result = self.so.results_download_url("missing-job")
+
+        self.assertIsNone(result)
+        output = self.stdout_capture.getvalue()
+        self.assertIn("Bad status code: 404", output)
+
+    @patch("requests.get")
+    @patch("requests.head")
+    def test_download_job_results_fresh_download(self, mock_head, mock_get):
+        mock_head.return_value = self.make_head_response()
+        mock_get.return_value = self.make_get_response(b"0123456789")
+
+        with patch.object(Sutro, "results_download_url", return_value=self.payload):
+            result = self.so.download_job_results("test-job", output_path=self.tmpdir)
+
+        expected_path = os.path.join(self.tmpdir, "test-job.parquet")
+        self.assertEqual(result, expected_path)
+        with open(expected_path, "rb") as f:
+            self.assertEqual(f.read(), b"0123456789")
+        self.assertFalse(os.path.exists(expected_path + ".part"))
+        self.assertFalse(os.path.exists(expected_path + ".part.etag"))
+        # A fresh download must not send a Range header.
+        self.assertIsNone(mock_get.call_args.kwargs["headers"])
+        # Both direct requests must bound connect/read time so a stalled peer
+        # can't hang the download forever.
+        self.assertIsNotNone(mock_head.call_args.kwargs.get("timeout"))
+        self.assertIsNotNone(mock_get.call_args.kwargs.get("timeout"))
+
+    @patch("requests.get")
+    @patch("requests.head")
+    def test_download_job_results_resumes_partial_download(self, mock_head, mock_get):
+        destination = os.path.join(self.tmpdir, "test-job.parquet")
+        with open(destination + ".part", "wb") as f:
+            f.write(b"0123")
+        with open(destination + ".part.etag", "w") as f:
+            f.write('"abc123"')
+
+        mock_head.return_value = self.make_head_response()
+        mock_get.return_value = self.make_get_response(b"456789", status_code=206)
+
+        with patch.object(Sutro, "results_download_url", return_value=self.payload):
+            result = self.so.download_job_results("test-job", output_path=self.tmpdir)
+
+        self.assertEqual(result, destination)
+        with open(destination, "rb") as f:
+            self.assertEqual(f.read(), b"0123456789")
+        self.assertEqual(
+            mock_get.call_args.kwargs["headers"],
+            {"Range": "bytes=4-", "If-Range": '"abc123"'},
+        )
+
+    @patch("requests.get")
+    @patch("requests.head")
+    def test_download_job_results_restarts_on_etag_mismatch(self, mock_head, mock_get):
+        destination = os.path.join(self.tmpdir, "test-job.parquet")
+        with open(destination + ".part", "wb") as f:
+            f.write(b"stale")
+        with open(destination + ".part.etag", "w") as f:
+            f.write('"old-etag"')
+
+        mock_head.return_value = self.make_head_response(etag='"new-etag"')
+        mock_get.return_value = self.make_get_response(b"0123456789")
+
+        with patch.object(Sutro, "results_download_url", return_value=self.payload):
+            result = self.so.download_job_results("test-job", output_path=self.tmpdir)
+
+        self.assertEqual(result, destination)
+        with open(destination, "rb") as f:
+            self.assertEqual(f.read(), b"0123456789")
+        self.assertIsNone(mock_get.call_args.kwargs["headers"])
+
+    @patch("requests.get")
+    @patch("requests.head")
+    def test_failed_restart_does_not_resume_onto_stale_partial(
+        self, mock_head, mock_get
+    ):
+        # An artifact rebuilt server-side (new ETag) plus a GET failure on the
+        # first attempt must not leave a stale .part that the retry
+        # Range-appends onto, which would corrupt the file.
+        destination = os.path.join(self.tmpdir, "test-job.parquet")
+        with open(destination + ".part", "wb") as f:
+            f.write(b"stale")
+        with open(destination + ".part.etag", "w") as f:
+            f.write('"old-etag"')
+
+        mock_head.return_value = self.make_head_response(etag='"new-etag"')
+
+        expired_response = MagicMock()
+        expired_response.status_code = 403
+        failing_get = MagicMock()
+        failing_get.__enter__.return_value = failing_get
+        failing_get.raise_for_status.side_effect = requests.HTTPError(
+            response=expired_response
+        )
+        mock_get.return_value = failing_get
+
+        with patch.object(Sutro, "results_download_url", return_value=self.payload):
+            result = self.so.download_job_results("test-job", output_path=self.tmpdir)
+        self.assertIsNone(result)
+
+        mock_get.return_value = self.make_get_response(b"0123456789")
+        with patch.object(Sutro, "results_download_url", return_value=self.payload):
+            result = self.so.download_job_results("test-job", output_path=self.tmpdir)
+
+        self.assertEqual(result, destination)
+        with open(destination, "rb") as f:
+            self.assertEqual(f.read(), b"0123456789")
+        self.assertIsNone(mock_get.call_args.kwargs["headers"])
+
+    @patch("requests.get")
+    @patch("requests.head")
+    def test_download_job_results_trailing_slash_creates_directory(
+        self, mock_head, mock_get
+    ):
+        mock_head.return_value = self.make_head_response()
+        mock_get.return_value = self.make_get_response(b"0123456789")
+
+        output_dir = os.path.join(self.tmpdir, "downloads") + os.sep
+        with patch.object(Sutro, "results_download_url", return_value=self.payload):
+            result = self.so.download_job_results("test-job", output_path=output_dir)
+
+        expected_path = os.path.join(self.tmpdir, "downloads", "test-job.parquet")
+        self.assertEqual(result, expected_path)
+        with open(expected_path, "rb") as f:
+            self.assertEqual(f.read(), b"0123456789")
+
+    @patch("requests.get")
+    def test_results_download_url_non_json_error_body(self, mock_get):
+        # Cloudflare 5xx pages are HTML; printing the error must not raise
+        # JSONDecodeError from inside the handler.
+        mock_response = MagicMock()
+        mock_response.status_code = 502
+        mock_response.text = "<html>502 Bad Gateway</html>"
+        mock_response.json.side_effect = requests.exceptions.JSONDecodeError(
+            "Expecting value", "<html>", 0
+        )
+        mock_response.raise_for_status.side_effect = requests.HTTPError(
+            response=mock_response
+        )
+        mock_get.return_value = mock_response
+
+        result = self.so.results_download_url("test-job")
+
+        self.assertIsNone(result)
+        output = self.stdout_capture.getvalue()
+        self.assertIn("Bad status code: 502", output)
+        self.assertIn("502 Bad Gateway", output)
+
+    @patch("requests.get")
+    def test_results_download_url_transport_error_returns_none(self, mock_get):
+        mock_get.side_effect = requests.ConnectionError("connection reset by peer")
+
+        result = self.so.results_download_url("test-job")
+
+        self.assertIsNone(result)
+        output = self.stdout_capture.getvalue()
+        self.assertIn("Request failed", output)
+
+    @patch("requests.get")
+    @patch("requests.head")
+    def test_download_without_etag_skips_resume(self, mock_head, mock_get):
+        # Some S3-compatible gateways omit ETag; resume can't be validated so
+        # the download must restart fresh instead of crashing or appending.
+        destination = os.path.join(self.tmpdir, "test-job.parquet")
+        with open(destination + ".part", "wb") as f:
+            f.write(b"0123")
+        with open(destination + ".part.etag", "w") as f:
+            f.write('"abc123"')
+
+        mock_head.return_value = self.make_head_response(etag=None)
+        mock_get.return_value = self.make_get_response(b"0123456789")
+
+        with patch.object(Sutro, "results_download_url", return_value=self.payload):
+            result = self.so.download_job_results("test-job", output_path=self.tmpdir)
+
+        self.assertEqual(result, destination)
+        with open(destination, "rb") as f:
+            self.assertEqual(f.read(), b"0123456789")
+        self.assertIsNone(mock_get.call_args.kwargs["headers"])
+        self.assertFalse(os.path.exists(destination + ".part.etag"))
+
+    @patch("requests.get")
+    @patch("requests.head")
+    def test_resume_restarts_when_artifact_changes_between_head_and_get(
+        self, mock_head, mock_get
+    ):
+        # If the cached artifact is replaced between the HEAD check and the
+        # Range GET, a 206 for the new object must not be appended onto the
+        # old partial.
+        destination = os.path.join(self.tmpdir, "test-job.parquet")
+        with open(destination + ".part", "wb") as f:
+            f.write(b"0123")
+        with open(destination + ".part.etag", "w") as f:
+            f.write('"abc123"')
+
+        mock_head.return_value = self.make_head_response()
+        mock_get.side_effect = [
+            self.make_get_response(
+                b"456789", status_code=206, headers={"ETag": '"rebuilt"'}
+            ),
+            self.make_get_response(b"0123456789"),
+        ]
+
+        with patch.object(Sutro, "results_download_url", return_value=self.payload):
+            result = self.so.download_job_results("test-job", output_path=self.tmpdir)
+
+        self.assertEqual(result, destination)
+        with open(destination, "rb") as f:
+            self.assertEqual(f.read(), b"0123456789")
+        first_headers = mock_get.call_args_list[0].kwargs["headers"]
+        self.assertEqual(first_headers["Range"], "bytes=4-")
+        self.assertEqual(first_headers["If-Range"], '"abc123"')
+        self.assertIsNone(mock_get.call_args_list[1].kwargs["headers"])
+
+    @patch("requests.head")
+    def test_download_job_results_presigned_failure_returns_none(self, mock_head):
+        error_response = MagicMock()
+        error_response.status_code = 403
+        mock_head.return_value.raise_for_status.side_effect = requests.HTTPError(
+            response=error_response
+        )
+
+        with patch.object(Sutro, "results_download_url", return_value=self.payload):
+            result = self.so.download_job_results("test-job", output_path=self.tmpdir)
+
+        self.assertIsNone(result)
+        output = self.stdout_capture.getvalue()
+        self.assertIn("Download failed with status code: 403", output)
+
+    @patch("requests.get")
+    @patch("requests.head")
+    def test_streaming_failure_returns_none_and_keeps_partial(
+        self, mock_head, mock_get
+    ):
+        # Connection resets mid-stream raise RequestException subclasses that
+        # aren't HTTPErrors; they must follow the print-and-return-None error
+        # style and leave the partial file in place for a resumed retry.
+        mock_head.return_value = self.make_head_response()
+
+        def interrupted_chunks():
+            yield b"0123"
+            raise requests.exceptions.ChunkedEncodingError("connection reset")
+
+        response = MagicMock()
+        response.status_code = 200
+        response.headers = {}
+        response.iter_content.return_value = interrupted_chunks()
+        response.__enter__.return_value = response
+        mock_get.return_value = response
+
+        with patch.object(Sutro, "results_download_url", return_value=self.payload):
+            result = self.so.download_job_results("test-job", output_path=self.tmpdir)
+
+        self.assertIsNone(result)
+        destination = os.path.join(self.tmpdir, "test-job.parquet")
+        with open(destination + ".part", "rb") as f:
+            self.assertEqual(f.read(), b"0123")
+        with open(destination + ".part.etag") as f:
+            self.assertEqual(f.read(), '"abc123"')
+        output = self.stdout_capture.getvalue()
+        self.assertIn("Download interrupted", output)
+
+    @patch("requests.get")
+    @patch("requests.head")
+    def test_transport_error_output_redacts_presigned_credentials(
+        self, mock_head, mock_get
+    ):
+        # str(ConnectionError) includes the full request URL; presigned query
+        # params grant access to results and must never reach logs.
+        mock_head.return_value = self.make_head_response()
+        mock_get.side_effect = requests.ConnectionError(
+            "HTTPSConnectionPool(host='r2.example.com'): Max retries exceeded "
+            "with url: /results.parquet?X-Amz-Credential=AKIASECRET"
+            "&X-Amz-Signature=deadbeefcafe"
+        )
+
+        with patch.object(Sutro, "results_download_url", return_value=self.payload):
+            result = self.so.download_job_results("test-job", output_path=self.tmpdir)
+
+        self.assertIsNone(result)
+        output = self.stdout_capture.getvalue()
+        self.assertIn("Download interrupted", output)
+        self.assertIn("ConnectionError", output)
+        self.assertNotIn("X-Amz-Signature", output)
+        self.assertNotIn("deadbeefcafe", output)
+        self.assertNotIn("AKIASECRET", output)
+
+    @patch("requests.get")
+    @patch("requests.head")
+    def test_restart_validates_against_replacement_metadata(
+        self, mock_head, mock_get
+    ):
+        # HEAD sees the old 10-byte artifact, but by GET time it was replaced
+        # by a 12-byte one: If-Range downgrades to a 200 full body. The
+        # download must validate against the replacement's size/ETag, not the
+        # stale HEAD metadata, or the complete download gets rejected.
+        destination = os.path.join(self.tmpdir, "test-job.parquet")
+        with open(destination + ".part", "wb") as f:
+            f.write(b"0123")
+        with open(destination + ".part.etag", "w") as f:
+            f.write('"abc123"')
+
+        mock_head.return_value = self.make_head_response()
+        replacement = b"0123456789AB"
+        mock_get.return_value = self.make_get_response(
+            replacement,
+            status_code=200,
+            headers={"ETag": '"replaced"', "Content-Length": "12"},
+        )
+
+        with patch.object(Sutro, "results_download_url", return_value=self.payload):
+            result = self.so.download_job_results("test-job", output_path=self.tmpdir)
+
+        self.assertEqual(result, destination)
+        with open(destination, "rb") as f:
+            self.assertEqual(f.read(), replacement)
+        self.assertFalse(os.path.exists(destination + ".part"))
+        self.assertFalse(os.path.exists(destination + ".part.etag"))
+
+    @patch("requests.get")
+    @patch("requests.head")
+    def test_short_download_is_not_published(self, mock_head, mock_get):
+        # A GET that ends cleanly with fewer bytes than HEAD advertised (e.g.
+        # an ETag-less gateway serving a replaced object) must not be renamed
+        # into a "successful" truncated Parquet file.
+        mock_head.return_value = self.make_head_response(content_length=10)
+        mock_get.return_value = self.make_get_response(b"0123")
+
+        with patch.object(Sutro, "results_download_url", return_value=self.payload):
+            result = self.so.download_job_results("test-job", output_path=self.tmpdir)
+
+        self.assertIsNone(result)
+        destination = os.path.join(self.tmpdir, "test-job.parquet")
+        self.assertFalse(os.path.exists(destination))
+        self.assertTrue(os.path.exists(destination + ".part"))
+        output = self.stdout_capture.getvalue()
+        self.assertIn("Download incomplete", output)
+
+    def test_download_job_results_propagates_url_failure(self):
+        with patch.object(Sutro, "results_download_url", return_value=None):
+            result = self.so.download_job_results("test-job")
+
+        self.assertIsNone(result)
 
 
 if __name__ == "__main__":

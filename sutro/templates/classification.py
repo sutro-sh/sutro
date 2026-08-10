@@ -26,7 +26,7 @@ class ClassificationTemplates(BaseSutroClient):
         A simple template style function to perform classification on the provided data with Sutro. The intention is that the implemented code should be very easy to extend further, while showing a basic structure for large-scale classification with Sutro.
 
         It uses structured outputs with a scratchpad field, enabling the model to reason step-by-step before providing the final classification.
-        The method supports various input formats including lists, DataFrames (Polars or Pandas), file paths, and datasets.
+        The method supports various input formats including lists, DataFrames (Polars or Pandas), file paths, and download URLs.
         The method will wait for the classification job to complete before returning the results.
 
         Args:
@@ -40,7 +40,7 @@ class ClassificationTemplates(BaseSutroClient):
             name (Union[str, List[str]], optional): A job name for experiment/metadata tracking purposes. Defaults to None.
             description (Union[str, List[str]], optional): A job description for experiment/metadata tracking purposes. Defaults to None.
             output_column (str, optional): The column name to store the classification results in if the input is a DataFrame. Defaults to "inference_result".
-            column (Union[str, List[str]], optional): The column name to use for classification. Required if data is a DataFrame, file path, or dataset. If a list is supplied, it will concatenate the columns of the list into a single column, accepting separator strings.
+            column (Union[str, List[str]], optional): The column name to use for classification. Required if data is a DataFrame or file path. If a list is supplied, it will concatenate the columns of the list into a single column, accepting separator strings.
             truncate_rows (bool, optional): If True, any rows that have a token count exceeding the context window length of the selected model will be truncated to the max length that will fit within the context window. Defaults to True.
             include_scratchpad (bool, optional): If True, includes the model's thinking scratchpad in the output. If False, only returns the final classification. Defaults to False.
 

@@ -221,7 +221,6 @@ The SDK accepts:
 - Pandas and Polars DataFrames
 - Local CSV, Parquet, and TXT files
 - HTTP(S) CSV or Parquet download URLs
-- Sutro dataset IDs for larger uploaded datasets
 
 Results preserve input order. SDK result helpers return Polars DataFrames by default and can join results back to the original Pandas or Polars DataFrame.
 
@@ -291,7 +290,7 @@ sutro quotas
 
 ## Security and Deployment
 
-Sutro runs on a managed cloud by default. Job result data and user datasets are retained for up to 90 days by default, with configurable retention options in the web app. Enterprise deployments can support custom retention, custom integrations, custom models, or isolated cloud requirements.
+Sutro runs on a managed cloud by default. Job data is retained for up to 90 days by default, with configurable retention options in the web app. Enterprise deployments can support custom retention, custom integrations, custom models, or isolated cloud requirements.
 
 For security, deployment, or procurement questions, contact [team@sutro.sh](mailto:team@sutro.sh).
 

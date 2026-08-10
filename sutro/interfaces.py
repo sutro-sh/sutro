@@ -33,10 +33,10 @@ class BaseSutroClient:
         truncate_rows: bool = True,
     ) -> Any:
         """
-        Run inference on a dataset.
+        Run inference on the provided data.
 
         Args:
-            data: Input data (list, DataFrame, or dataset ID)
+            data: Input data (list, DataFrame, file path, or download URL)
             model: Model(s) to use for inference
             name: Job name(s)
             description: Job description(s)
