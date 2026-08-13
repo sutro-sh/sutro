@@ -10,9 +10,9 @@ from sutro.sdk import Sutro
 
 def sutro_client() -> Sutro:
     client = object.__new__(Sutro)
+    client.api_url = "https://harmonize.example.test"
     client.api_key = "test-api-key"
-    client.base_url = "https://api.sutro.sh"
-    client.serving_base_url = "https://serve.sutro.sh"
+    client.serving_base_url = None
     return client
 
 

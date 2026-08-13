@@ -1,49 +1,57 @@
 from datetime import timezone
+import os
+
 import click
 from colorama import Fore, Style
-import os
-import json
 from sutro.sdk import Sutro
+from sutro.validation import (
+    API_KEY_ENV,
+    API_URL_ENV,
+    load_config,
+    normalize_api_url,
+    resolve_api_configuration,
+    resolve_api_configuration_with_context,
+    save_config,
+)
 import polars as pl
 import warnings
 
 warnings.filterwarnings("ignore", category=pl.PolarsInefficientMapWarning)
 pl.Config.set_tbl_hide_dataframe_shape(True)
 
-CONFIG_DIR = os.path.expanduser("~/.sutro")
-CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
-
-
-def load_config():
-    if os.path.exists(CONFIG_FILE):
-        with open(CONFIG_FILE, "r") as f:
-            return json.load(f)
-    return {}
-
-
-def save_config(config):
-    os.makedirs(CONFIG_DIR, exist_ok=True)
-    with open(CONFIG_FILE, "w") as f:
-        json.dump(config, f)
-
 
 def check_auth():
-    config = load_config()
-    return config.get("api_key") is not None
+    api_key, api_url = resolve_api_configuration()
+    return api_key is not None and api_url is not None
 
 
 def get_sdk():
+    return Sutro()
+
+
+def set_config_api_url(api_url: str):
     config = load_config()
-    if config.get("base_url") != None:
-        return Sutro(api_key=config.get("api_key"), base_url=config.get("base_url"))
-    else:
-        return Sutro(api_key=config.get("api_key"))
+    normalized_api_url = normalize_api_url(api_url)
+    current_api_url = config.get("api_url") or config.get("base_url")
+    try:
+        normalized_current_api_url = (
+            normalize_api_url(current_api_url) if current_api_url else None
+        )
+    except ValueError:
+        normalized_current_api_url = None
+
+    deployment_changed = normalized_current_api_url != normalized_api_url
+    config["api_url"] = normalized_api_url
+    config.pop("base_url", None)
+    if deployment_changed:
+        config.pop("api_key", None)
+    save_config(config)
+    return deployment_changed
 
 
 def set_config_base_url(base_url: str):
-    config = load_config()
-    config["base_url"] = base_url
-    save_config(config)
+    """Deprecated compatibility alias for ``set_config_api_url``."""
+    return set_config_api_url(base_url)
 
 
 def set_human_readable_dates(datetime_columns, df):
@@ -69,9 +77,17 @@ def set_human_readable_dates(datetime_columns, df):
 @click.group(invoke_without_command=True)
 @click.pass_context
 def cli(ctx):
-    # Allow login and set-base-url commands without authentication
-    if not check_auth() and ctx.invoked_subcommand not in ["login", "set-base-url"]:
-        click.echo("Please login using 'sutro login'.")
+    # Configuration commands must remain available before authentication.
+    api_key, api_url, api_url_error = resolve_api_configuration_with_context()
+    if (api_key is None or api_url is None) and ctx.invoked_subcommand not in [
+        "login",
+        "set-api-url",
+        "set-base-url",
+    ]:
+        click.echo(
+            api_url_error
+            or "Configure SUTRO_API_URL and SUTRO_API_KEY, or run 'sutro login'."
+        )
         ctx.exit(1)
 
     if ctx.invoked_subcommand is None:
@@ -87,10 +103,40 @@ To see a list of all available commands, use 'sutro --help'.
 
 @cli.command()
 def login():
-    """Set or update your API key for Sutro."""
-    config = load_config()
-    default_api_key = config.get("api_key", "")
-    default_base_url = config.get("base_url", "https://api.sutro.sh")
+    """Configure a Sutro deployment URL and API key."""
+    if API_KEY_ENV in os.environ or API_URL_ENV in os.environ:
+        click.echo(
+            Fore.YELLOW
+            + "Warning: SUTRO_API_URL and SUTRO_API_KEY environment variables "
+            + "take precedence over credentials saved by 'sutro login'. Unset "
+            + "them to use the saved credentials."
+            + Style.RESET_ALL
+        )
+    default_api_key, default_api_url = resolve_api_configuration()
+    default_api_key = default_api_key or ""
+    default_api_url = default_api_url or ""
+
+    api_url = click.prompt(
+        "Enter your Sutro deployment URL",
+        default=default_api_url or None,
+        show_default=bool(default_api_url),
+    )
+    try:
+        api_url = normalize_api_url(api_url)
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    try:
+        normalized_default_api_url = (
+            normalize_api_url(default_api_url) if default_api_url else None
+        )
+    except ValueError:
+        normalized_default_api_url = None
+    if api_url != normalized_default_api_url:
+        # Deployment keys are scoped. Never offer a key resolved for one URL
+        # as the default after the user chooses another deployment.
+        default_api_key = ""
+
     click.echo(
         "Hint: An API key is already set. Press Enter to keep the existing key."
         if default_api_key
@@ -103,8 +149,8 @@ def login():
         show_default=False,
     )
 
-    result = get_sdk().try_authentication(api_key)
-    if not result or "authenticated" not in result or result["authenticated"] != True:
+    result = Sutro(api_key=api_key, api_url=api_url).try_authentication(api_key)
+    if not result or result.get("authenticated") is not True:
         raise click.ClickException(
             Fore.RED + "Invalid API key. Try again." + Style.RESET_ALL
         )
@@ -131,7 +177,10 @@ def login():
             Fore.GREEN + "Successfully authenticated. Welcome back!" + Style.RESET_ALL
         )
 
-    save_config({"api_key": api_key, "base_url": default_base_url})
+    config = load_config()
+    config.update({"api_key": api_key, "api_url": api_url})
+    config.pop("base_url", None)
+    save_config(config)
 
 
 @cli.group()
@@ -300,12 +349,47 @@ def docs():
     click.launch("https://docs.sutro.sh")
 
 
-@cli.command()
+@cli.command("set-api-url")
+@click.argument("api_url")
+def set_api_url(api_url):
+    """Set the Sutro deployment URL for Sutro API requests."""
+    try:
+        deployment_changed = set_config_api_url(api_url)
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(
+        Fore.GREEN + f"API URL set to {normalize_api_url(api_url)}." + Style.RESET_ALL
+    )
+    if deployment_changed:
+        click.echo(
+            Fore.YELLOW
+            + "The persisted API key was cleared because the deployment changed. "
+            + "Run 'sutro login' to configure a key for this deployment."
+            + Style.RESET_ALL
+        )
+
+
+@cli.command("set-base-url", hidden=True)
 @click.argument("base_url")
 def set_base_url(base_url):
-    """Set the base URL for the Sutro API."""
-    set_config_base_url(base_url)
-    click.echo(Fore.GREEN + f"Base URL set to {base_url}." + Style.RESET_ALL)
+    """Deprecated alias for set-api-url."""
+    try:
+        deployment_changed = set_config_base_url(base_url)
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(
+        Fore.YELLOW
+        + "set-base-url is deprecated; use set-api-url. "
+        + f"API URL set to {normalize_api_url(base_url)}."
+        + Style.RESET_ALL
+    )
+    if deployment_changed:
+        click.echo(
+            Fore.YELLOW
+            + "The persisted API key was cleared because the deployment changed. "
+            + "Run 'sutro login' to configure a key for this deployment."
+            + Style.RESET_ALL
+        )
 
 
 @cli.command()

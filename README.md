@@ -53,38 +53,49 @@ uv pip install sutro
 
 ### Authenticate
 
+Create a deployment API key from the **API Keys** panel in your Sutro UI,
+then configure the SDK with your deployment URL and key:
+
+If the panel is not visible, contact the Sutro team at
+[team@sutro.sh](mailto:team@sutro.sh) to create a key for you.
+
+```bash
+export SUTRO_API_URL="https://your-sutro-deployment.example.com"
+export SUTRO_API_KEY="sk_..."
+```
+
+`SUTRO_API_URL` may be the Sutro deployment base URL or the same URL with `/v1`
+appended. The SDK normalizes either form to `/v1` and sends all requests through
+that deployment.
+
+You can instead persist both values interactively for future SDK and CLI calls:
+
 ```bash
 sutro login
 ```
 
-This stores your API key locally for future SDK and CLI calls. You can also set a key inside Python:
+Or configure the shared Python client directly:
 
 ```python
 import sutro as so
 
+so.set_api_url("https://your-sutro-deployment.example.com")
 so.set_api_key("sk_...")
 ```
 
+Set the URL first: changing deployments clears the current key so it cannot be
+sent to another deployment accidentally.
+
+Explicit constructor values take precedence over environment variables, which
+take precedence over saved `sutro login` credentials. `Sutro(api_key="...")`
+can use `SUTRO_API_URL`, but it will not borrow a saved deployment URL because
+that URL may be paired with a different saved key. An explicit URL similarly
+reuses a fallback key only when the normalized URLs match exactly.
+
 ## Run a Sutro Function
 
-If your team has published a Function, call it by name with the input fields it expects.
-
-```python
-import sutro as so
-
-
-result = so.run_function(
-    name="support-agent-judge",
-    input_data={
-        "conversation": "Customer: I cannot log in. Agent: I reset your password.",
-        "rubric": "Pass if the agent directly resolves the customer issue.",
-    },
-)
-
-print(result)
-```
-
-For larger datasets, use the same Function through Batch:
+If your team has published a Function, call it by name with rows whose fields
+match its input schema:
 
 ```python
 import polars as pl
@@ -290,7 +301,13 @@ sutro quotas
 
 ## Security and Deployment
 
-Sutro runs on a managed cloud by default. Job data is retained for up to 90 days by default, with configurable retention options in the web app. Enterprise deployments can support custom retention, custom integrations, custom models, or isolated cloud requirements.
+The SDK has no centralized API fallback. Requests and deployment API keys are
+sent only to the Sutro deployment configured by `SUTRO_API_URL`. Manage and
+revoke those keys from that deployment's **API Keys** panel.
+
+Job data is retained for up to 90 days by default, with configurable retention
+options in the web app. Enterprise deployments can support custom retention,
+custom integrations, or isolated cloud requirements.
 
 For security, deployment, or procurement questions, contact [team@sutro.sh](mailto:team@sutro.sh).
 

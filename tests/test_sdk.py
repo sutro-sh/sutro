@@ -17,9 +17,12 @@ from sutro.common import to_colored_text, prepare_input_data
 
 
 class TestSutro(unittest.TestCase):
-    def setUp(self):        
+    def setUp(self):
         # Create an instance of Sutro with a dummy API key
-        self.so = Sutro(api_key="test_api_key", base_url="https://staging.api.sutro.sh/")
+        self.so = Sutro(
+            api_key="test_api_key",
+            api_url="https://harmonize.example.test",
+        )
 
         # Setup capture of stdout for testing console output
         self.stdout_capture = io.StringIO()
@@ -184,7 +187,10 @@ class TestSutro(unittest.TestCase):
 
 class TestRequestRetries(unittest.TestCase):
     def setUp(self):
-        self.so = Sutro(api_key="test_api_key")
+        self.so = Sutro(
+            api_key="test_api_key",
+            api_url="https://harmonize.example.test",
+        )
 
     @patch("requests.post")
     def test_batch_submission_is_not_retried_after_524(self, mock_post):
@@ -242,7 +248,10 @@ class TestUserExperience(unittest.TestCase):
 
     def setUp(self):
         # Create an instance of Sutro with a dummy API key
-        self.so = Sutro(api_key="test_api_key")
+        self.so = Sutro(
+            api_key="test_api_key",
+            api_url="https://harmonize.example.test",
+        )
 
         # Setup capture of stdout for testing console output
         self.stdout_capture = io.StringIO()
@@ -440,7 +449,10 @@ class TestColorFormatting(unittest.TestCase):
 
     def setUp(self):
         # Create an instance of Sutro with a dummy API key
-        self.so = Sutro(api_key="test_api_key")
+        self.so = Sutro(
+            api_key="test_api_key",
+            api_url="https://harmonize.example.test",
+        )
 
         # Setup capture of stdout for testing console output
         self.stdout_capture = io.StringIO()
@@ -691,7 +703,10 @@ class TestPrepareInputData(unittest.TestCase):
 
 class TestPresignedResultsDownload(unittest.TestCase):
     def setUp(self):
-        self.so = Sutro(api_key="test_api_key")
+        self.so = Sutro(
+            api_key="test_api_key",
+            api_url="https://harmonize.example.test",
+        )
 
         self.stdout_capture = io.StringIO()
         self.old_stdout = sys.stdout

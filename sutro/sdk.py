@@ -1,9 +1,11 @@
 import requests
 import pandas as pd
 import polars as pl
+import hashlib
 import json
 from typing import Union, List, Optional, Dict, Any, Type
 import os
+import warnings
 
 from tqdm import tqdm
 from yaspin import yaspin
@@ -19,12 +21,10 @@ from sutro.common import (
     normalize_output_schema,
     to_colored_text,
     fancy_tqdm,
-    make_clickable_link,
     BASE_OUTPUT_COLOR,
 )
 from sutro.interfaces import JobStatus
 from sutro.observability import (
-    _traced_run,
     _is_langsmith_tracing_enabled,
     _create_batch_traces,
     _has_open_batch_traces,
@@ -33,7 +33,13 @@ from sutro.observability import (
 from sutro.templates.classification import ClassificationTemplates
 from sutro.templates.embed import EmbeddingTemplates
 from sutro.templates.evals import EvalTemplates
-from sutro.validation import check_version, check_for_api_key
+from sutro.validation import (
+    DIRECT_TENSOR_FACTORY_API_ERROR,
+    check_version,
+    normalize_api_url,
+    resolve_environment_api_configuration_with_context,
+    resolve_api_configuration_with_context,
+)
 
 JOB_NAME_CHAR_LIMIT = 45
 JOB_DESCRIPTION_CHAR_LIMIT = 512
@@ -53,17 +59,116 @@ SPINNER = Spinners.dots14
 # at some point, but even Rich links aren't clickable on MacOS Terminal
 
 
+class SutroConfigurationError(RuntimeError):
+    """Raised when the SDK is used without deployment API configuration."""
+
+
 class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
     def __init__(
         self,
         api_key: str = None,
-        base_url: str = "https://api.sutro.sh",
-        serving_base_url: str = "https://serve.sutro.sh",
+        base_url: str = None,
+        serving_base_url: str = None,
+        *,
+        api_url: str = None,
     ):
-        self.api_key = api_key or check_for_api_key()
-        self.base_url = base_url
+        if base_url is not None:
+            warnings.warn(
+                "base_url is deprecated; use api_url instead.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+        if api_url is not None and base_url is not None:
+            normalized_api_url = normalize_api_url(api_url)
+            normalized_base_url = normalize_api_url(base_url)
+            if normalized_api_url != normalized_base_url:
+                raise ValueError(
+                    "api_url and deprecated base_url must refer to the same URL."
+                )
+            configured_api_url = normalized_api_url
+        else:
+            configured_api_url = api_url if api_url is not None else base_url
+            if configured_api_url is not None:
+                configured_api_url = normalize_api_url(configured_api_url)
+
+        if api_key is not None and configured_api_url is not None:
+            # A complete explicit pair must not depend on ambient config.
+            resolved_api_key, resolved_api_url, resolved_api_url_error = (
+                None,
+                None,
+                None,
+            )
+        elif api_key is not None:
+            # A caller-supplied key may pair with an environment URL because
+            # the environment is an intentional per-process override. Never
+            # borrow a persisted URL here: it may be stale and belong to the
+            # persisted key that the caller explicitly replaced.
+            resolved_api_key, resolved_api_url, resolved_api_url_error = (
+                resolve_environment_api_configuration_with_context()
+            )
+        else:
+            resolved_api_key, resolved_api_url, resolved_api_url_error = (
+                resolve_api_configuration_with_context()
+            )
+
+        if configured_api_url is None:
+            # An explicit key can safely use the URL resolved from the same
+            # environment/config snapshot. Invalid inherited URLs remain
+            # non-routable and surface their original error on first use.
+            self._api_url = resolved_api_url
+            self._api_url_error = resolved_api_url_error
+            self.api_key = api_key if api_key is not None else resolved_api_key
+        else:
+            self._api_url = configured_api_url
+            self._api_url_error = None
+            if api_key is not None:
+                self.api_key = api_key
+            elif configured_api_url == resolved_api_url:
+                # Reuse a fallback key only when its URL proves it belongs to
+                # the exact deployment explicitly selected by the caller.
+                self.api_key = resolved_api_key
+            else:
+                self.api_key = None
+
+        if serving_base_url is not None:
+            warnings.warn(
+                "serving_base_url is deprecated; synchronous run_function() is "
+                "not available through Sutro deployments.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
         self.serving_base_url = serving_base_url
         check_version("sutro")
+
+    @property
+    def api_url(self) -> Optional[str]:
+        """Canonical Sutro deployment ``/v1`` prefix used for all requests."""
+        return self._api_url
+
+    @api_url.setter
+    def api_url(self, api_url: str):
+        normalized_api_url = normalize_api_url(api_url)
+        current_api_url = getattr(self, "_api_url", None)
+        if normalized_api_url != current_api_url:
+            # Deployment keys are scoped. Changing the destination invalidates
+            # the prior pairing so it cannot be sent to a different deployment.
+            self.api_key = None
+        self._api_url = normalized_api_url
+        self._api_url_error = None
+
+    @property
+    def base_url(self) -> Optional[str]:
+        """Deprecated alias for :attr:`api_url`."""
+        return self.api_url
+
+    @base_url.setter
+    def base_url(self, base_url: str):
+        warnings.warn(
+            "base_url is deprecated; use api_url instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        self.api_url = base_url
 
     def set_api_key(self, api_key: str):
         """
@@ -80,28 +185,41 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
         """
         self.api_key = api_key
 
+    def set_api_url(self, api_url: str):
+        """Set the Sutro deployment URL used by the Sutro API.
+
+        The value may be either the deployment origin or its ``/v1`` API
+        prefix. It is normalized to ``<origin>/v1``. Changing deployments
+        clears the current API key; call :meth:`set_api_key` with a key issued
+        by the new deployment before making a request.
+        """
+        self.api_url = api_url
+
     def set_base_url(self, base_url: str):
-        """
-        Set the base URL for the Sutro API.
-
-        This method allows you to set the base URL for the Sutro API.
-        The base URL is used to authenticate requests to the API.
-
-        Args:
-            base_url (str): The base URL to set.
-        """
-        self.base_url = base_url
+        """Deprecated alias for :meth:`set_api_url`."""
+        warnings.warn(
+            "set_base_url() is deprecated; use set_api_url() instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        self.set_api_url(base_url)
 
     def set_serving_base_url(self, serving_base_url: str):
         """
-        Set the serving base URL for the Sutro API.
+        Store the deprecated serving URL for source compatibility.
 
-        This method allows you to set the serving base URL for the Sutro API.
-        The serving base URL is used for function execution requests.
+        Synchronous Function execution is not available through Sutro yet,
+        so this value is not used for requests.
 
         Args:
             serving_base_url (str): The serving base URL to set.
         """
+        warnings.warn(
+            "set_serving_base_url() is deprecated; synchronous run_function() "
+            "is not available through Sutro deployments.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         self.serving_base_url = serving_base_url
 
     def do_request(
@@ -116,15 +234,35 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
         """
         Helper to make authenticated requests.
         """
-        key = self.api_key if not api_key_override else api_key_override
+        api_url = self.api_url if base_url_override is None else base_url_override
+        if api_url is None:
+            if self._api_url_error is not None:
+                raise SutroConfigurationError(self._api_url_error)
+            raise SutroConfigurationError(
+                "Sutro API URL is not configured. Set SUTRO_API_URL to your "
+                "Sutro deployment URL (for example, "
+                "https://sutro.example.com)."
+            )
+        api_url = normalize_api_url(api_url)
+        if base_url_override is not None:
+            if api_url != self.api_url and api_key_override is None:
+                raise SutroConfigurationError(
+                    "Overriding the Sutro API URL requires api_key_override so "
+                    "a key scoped to one deployment is never sent to another."
+                )
+        url = api_url.rstrip("/") + "/" + endpoint.lstrip("/")
+
+        key = self.api_key if api_key_override is None else api_key_override
+        if not isinstance(key, str) or not key.strip():
+            raise SutroConfigurationError(
+                "Sutro API key is not configured. Create a key in your Sutro "
+                "deployment's API Keys panel and set SUTRO_API_KEY."
+            )
         headers = {"Authorization": f"Key {key}"}
 
         # Merge with any headers passed in kwargs
         if "headers" in kwargs:
             headers.update(kwargs.pop("headers"))
-
-        base_url = base_url_override if base_url_override else self.base_url
-        url = base_url.rstrip("/") + "/" + endpoint.lstrip("/")
 
         # Helper to make the actual HTTP request
         def _make_request():
@@ -142,6 +280,24 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
             else:
                 raise ValueError(f"Unsupported HTTP method: {method}")
 
+        def _raise_direct_tensor_factory_configuration_error(
+            error: requests.HTTPError,
+        ) -> None:
+            response = error.response
+            if response is None or response.status_code != 410:
+                return
+            try:
+                response_data = response.json()
+            except (TypeError, ValueError):
+                return
+            detail = (
+                response_data.get("detail")
+                if isinstance(response_data, dict)
+                else None
+            )
+            if detail == DIRECT_TENSOR_FACTORY_API_ERROR:
+                raise SutroConfigurationError(detail) from error
+
         # Make initial request
         try:
             response = _make_request()
@@ -151,6 +307,7 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
             status_code = (
                 e.response.status_code if e.response is not None else None
             )
+            _raise_direct_tensor_factory_configuration_error(e)
 
             # Only retry on Cloudflare 524 timeout errors when retries are enabled.
             if status_code != 524 or max_retries <= 0:
@@ -175,6 +332,7 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
                         if retry_error.response is not None
                         else None
                     )
+                    _raise_direct_tensor_factory_configuration_error(retry_error)
                     # If not a 524 or this was the last retry, raise the error
                     if retry_status_code != 524 or attempt == max_retries - 1:
                         raise
@@ -297,12 +455,12 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
                         )
                         spinner.write(to_colored_text(f"Model: {model}"))
                         if not stay_attached:
-                            clickable_link = make_clickable_link(
-                                f"https://app.sutro.sh/jobs/{job_id}"
-                            )
+                            # TODO: Restore a deployment-local batch UI link when
+                            # Sutro deployments expose one.
                             spinner.write(
                                 to_colored_text(
-                                    f"Use `so.get_job_status('{job_id}')` to check the status of the job, or monitor progress at {clickable_link}"
+                                    f"Use `so.get_job_status('{job_id}')` to check "
+                                    "the status of the job."
                                 )
                             )
                             return job_id
@@ -319,10 +477,8 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
                     "Awaiting job start...",
                 )
             )
-            clickable_link = make_clickable_link(f"https://app.sutro.sh/jobs/{job_id}")
-            spinner.write(
-                to_colored_text(f"Progress can also be monitored at: {clickable_link}")
-            )
+            # TODO: Restore a deployment-local batch UI link when Sutro
+            # deployments expose one.
             started = self._await_job_start(job_id)
             if not started:
                 failure_reason = self._get_failure_reason(job_id)
@@ -547,76 +703,17 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
         langsmith_metadata: Optional[Dict[str, Any]] = None,
         langsmith_tags: Optional[List[str]] = None,
     ):
+        """Deprecated synchronous Function execution entry point.
+
+        Sutro deployments do not yet expose a synchronous serving proxy,
+        and the SDK will not send API keys to the legacy centralized serving
+        host. Use :meth:`batch_run_function` until that proxy is available.
         """
-        Run inference using the /functions/run endpoint for immediate model execution.
-
-        Automatically traces to LangSmith when LANGSMITH_TRACING=true is set.
-        Works normally without any tracing if langsmith is not installed or tracing is disabled.
-
-        Args:
-            name (str): The model name to use (e.g., "clay-bert", "clay-judge")
-            input_data (Union[dict, BaseModel]): The input data to send to the model.
-                Can be a dictionary or a Pydantic model instance.
-            langsmith_metadata (dict, optional): Additional metadata to attach to the LangSmith trace.
-                Only used when tracing is enabled.
-            langsmith_tags (list, optional): Tags to attach to the LangSmith trace for filtering.
-                Only used when tracing is enabled.
-
-        Returns:
-            dict: Standardized response with structure:
-                {
-                    "response": str,        # The predicted class/label
-                    "confidence": float,    # Confidence score (0.0-1.0)
-                    "predictions": [        # All predictions sorted by confidence
-                        {"label": str, "confidence": float},
-                        ...
-                    ],
-                    "run_id": str           # The ID of the function run
-                }
-
-        Example:
-            >>> import sutro
-            >>> so = sutro.Sutro()
-            >>> # Basic usage (traces automatically if LANGSMITH_TRACING=true)
-            >>> result = so.run_function(name="faithfulness-judge", input_data={"text": "..."})
-            >>>
-            >>> # With optional tracing metadata
-            >>> result = so.run_function(
-            ...     name="faithfulness-judge",
-            ...     input_data={"text": "..."},
-            ...     langsmith_metadata={"user_id": "123"},
-            ...     langsmith_tags=["production"]
-            ... )
-        """
-        # Convert Pydantic model to dict if needed
-        if isinstance(input_data, BaseModel):
-            input_data = input_data.model_dump()
-
-        try:
-            return _traced_run(
-                "clay-query-match-judge",
-                lambda inputs: self.do_request(
-                    "POST",
-                    "functions/run",
-                    base_url_override=self.serving_base_url,
-                    json={"name": name, "input_data": inputs},
-                ).json(),
-                # We pass input_data like this (sort of clunky) so we can
-                # easily trace it
-                input_data=input_data,
-                langsmith_metadata=langsmith_metadata,
-                langsmith_tags=langsmith_tags,
-            )
-        except requests.HTTPError as e:
-            print(to_colored_text(f"Error: {e.response.status_code}", state="fail"))
-            try:
-                error_response = e.response.json()
-                print(to_colored_text(error_response, state="fail"))
-            except (ValueError, requests.exceptions.JSONDecodeError):
-                print(
-                    to_colored_text(f"Response body: {e.response.text}", state="fail")
-                )
-            return None
+        raise NotImplementedError(
+            "run_function() is temporarily unsupported through Sutro "
+            "deployments and will not contact the legacy serving host. Use "
+            "batch_run_function() instead."
+        )
 
     def batch_run_function(
         self,
@@ -635,9 +732,8 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
         """
         Run a Sutro Function on a large table, dataframe, or file using batch processing.
 
-        This is a convenience method for running batch inference with functions. All function
-        batch jobs run as priority 1, please use for flex processing endpoint for smaller dataset
-        sizes and a more real-time-like experience.
+        This is a convenience method for running batch inference with Functions.
+        The job priority defaults to 0 and can be changed with ``job_priority``.
 
         Automatically traces to LangSmith when LANGSMITH_TRACING=true is set, not a dry run and stay_attached=False.
         A parent trace is created at job submission time, and child traces (one per row) are added when results
@@ -913,14 +1009,8 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
                     text=to_colored_text("Awaiting status updates..."),
                     color=BASE_OUTPUT_COLOR,
                 )
-                clickable_link = make_clickable_link(
-                    f"https://app.sutro.sh/jobs/{job_id}"
-                )
-                spinner.write(
-                    to_colored_text(
-                        f"Progress can also be monitored at: {clickable_link}"
-                    )
-                )
+                # TODO: Restore a deployment-local batch UI link when Sutro
+                # deployments expose one.
                 spinner.start()
                 for line in streaming_response.iter_lines():
                     if line:
@@ -1160,9 +1250,8 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
             Union[pl.DataFrame, pd.DataFrame]: The results as a DataFrame. By default, returns polars.DataFrame; when with_original_df is an instance of pandas.DataFrame, returns pandas.DataFrame.
         """
 
-        cache_file_path = os.path.expanduser(
-            f"~/.sutro/job-results/{job_id}.snappy.parquet"
-        )
+        cache_file_path = self._job_results_cache_file_path(job_id)
+        self._remove_legacy_job_results_cache_file(job_id)
         expected_columns = {output_column}
         if include_inputs:
             expected_columns.add("inputs")
@@ -1597,6 +1686,61 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
         )
         return destination
 
+    def _job_results_cache_file_path(self, job_id: str) -> str:
+        """Return a cache path scoped to this credential pair and job."""
+        if self.api_url is None:
+            if self._api_url_error is not None:
+                raise SutroConfigurationError(self._api_url_error)
+            raise SutroConfigurationError(
+                "Sutro API URL is not configured. Set SUTRO_API_URL to your "
+                "Sutro deployment URL (for example, "
+                "https://sutro.example.com)."
+            )
+        if not isinstance(self.api_key, str) or not self.api_key.strip():
+            raise SutroConfigurationError(
+                "Sutro API key is not configured. Create a key in your Sutro "
+                "deployment's API Keys panel and set SUTRO_API_KEY."
+            )
+        credential_digest = hashlib.sha256(
+            f"{self.api_url}\0{self.api_key}".encode("utf-8")
+        ).hexdigest()
+        job_digest = hashlib.sha256(str(job_id).encode("utf-8")).hexdigest()
+        return os.path.expanduser(
+            "~/.sutro/job-results/"
+            f"{credential_digest}-{job_digest}.snappy.parquet"
+        )
+
+    def _remove_legacy_job_results_cache_file(self, job_id: str) -> None:
+        """Delete an old unscoped cache entry without ever reusing its data.
+
+        Legacy cache files contain no deployment or credential provenance, so
+        migrating their contents into the scoped cache could disclose another
+        deployment's results. Remove only the exact, top-level filename for
+        this job; unsafe job IDs are ignored rather than interpreted as paths.
+        """
+        job_id_text = str(job_id)
+        legacy_filename = f"{job_id_text}.snappy.parquet"
+        if (
+            "\0" in legacy_filename
+            or os.path.basename(legacy_filename) != legacy_filename
+        ):
+            return
+
+        legacy_path = os.path.join(
+            os.path.expanduser("~/.sutro/job-results"), legacy_filename
+        )
+        try:
+            os.unlink(legacy_path)
+        except (FileNotFoundError, IsADirectoryError):
+            return
+        except OSError:
+            warnings.warn(
+                "Unable to remove a legacy unscoped job-results cache file. "
+                "Run `sutro cache clear` to remove old cache artifacts.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+
     def cancel_job(self, job_id: str):
         """
         Cancel a job by its ID.
@@ -1626,7 +1770,7 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
 
     def try_authentication(self, api_key: str):
         """
-        Try to authenticate with the API key.
+        Validate an API key with the configured Sutro deployment.
 
         This method allows you to authenticate with the API key.
 
@@ -1640,7 +1784,9 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
             SPINNER, text=to_colored_text("Checking API key"), color=BASE_OUTPUT_COLOR
         ) as spinner:
             try:
-                response = self.do_request("GET", "try-authentication", api_key)
+                response = self.do_request(
+                    "GET", "auth/check", api_key_override=api_key
+                )
 
                 spinner.write(to_colored_text("✔"))
                 return response.json()
@@ -1699,15 +1845,8 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
             text=to_colored_text("Awaiting job completion"),
             color=BASE_OUTPUT_COLOR,
         ) as spinner:
-            if not is_cost_estimate:
-                clickable_link = make_clickable_link(
-                    f"https://app.sutro.sh/jobs/{job_id}"
-                )
-                spinner.write(
-                    to_colored_text(
-                        f"Progress can also be monitored at: {clickable_link}"
-                    )
-                )
+            # TODO: Restore a deployment-local batch UI link when Sutro
+            # deployments expose one.
             while (time.time() - start_time) < timeout:
                 try:
                     status = self._fetch_job_status(job_id)
