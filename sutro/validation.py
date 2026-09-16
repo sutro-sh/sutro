@@ -114,7 +114,16 @@ def _nonempty_string(value: Any) -> Optional[str]:
 
 def _is_known_direct_tensor_factory_api_url(value: str) -> bool:
     """Return whether a URL targets a known direct Tensor Factory host."""
-    parsed = urlsplit(value)
+    # Requests decodes unreserved hostname escapes and normalizes IDNA before
+    # sending a request. Inspect that same destination so an encoded hostname
+    # cannot bypass the deployment-only routing rule. Preparing sends no I/O.
+    try:
+        prepared_url = requests.Request("GET", value).prepare().url
+    except requests.RequestException as exc:
+        raise ValueError(
+            "Sutro API URL must be a valid absolute HTTP(S) deployment URL."
+        ) from exc
+    parsed = urlsplit(prepared_url)
     hostname = (parsed.hostname or "").lower().rstrip(".")
     return hostname.endswith(TENSOR_FACTORY_MODAL_HOST_SUFFIX) or any(
         hostname == suffix or hostname.endswith(f".{suffix}")

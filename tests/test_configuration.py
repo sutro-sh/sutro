@@ -54,6 +54,33 @@ class TestApiConfiguration(unittest.TestCase):
             with self.subTest(api_url=api_url), self.assertRaises(ValueError):
                 normalize_api_url(api_url)
 
+    def test_requests_url_preparation_failures_become_stable_value_errors(self):
+        for api_url in (
+            "https://host:abc",
+            "https://zero\u200bwidth.example.test",
+        ):
+            with self.subTest(api_url=api_url), self.assertRaisesRegex(
+                ValueError, "valid absolute HTTP"
+            ):
+                normalize_api_url(api_url)
+
+    @patch("sutro.sdk.requests.get")
+    def test_malformed_transport_url_is_deferred_as_configuration_error(
+        self, request
+    ):
+        os.environ.update(
+            {
+                "SUTRO_API_KEY": "deployment-key",
+                "SUTRO_API_URL": "https://host:abc",
+            }
+        )
+
+        client = Sutro()
+
+        with self.assertRaisesRegex(SutroConfigurationError, "valid absolute HTTP"):
+            client.do_request("GET", "list-jobs")
+        request.assert_not_called()
+
     def test_rejects_known_direct_tensor_factory_hosts(self):
         direct_tensor_factory_urls = [
             "https://api.sutro.sh",
@@ -85,6 +112,38 @@ class TestApiConfiguration(unittest.TestCase):
         )
         with self.assertRaisesRegex(ValueError, "must use HTTPS"):
             normalize_api_url("http://harmonize.example.test")
+
+    @patch("sutro.sdk.requests.get")
+    def test_encoded_direct_hosts_are_rejected_before_sending_a_key(self, get):
+        direct_urls = [
+            "https://api%2esutro%2esh/v1",
+            "https://%61pi.sutro.sh",
+            "https://serve.sutro.sh%2e",
+            "https://skysight-inc--tensor-factory-fastapi-app%2emodal.run",
+        ]
+        for api_url in direct_urls:
+            with self.subTest(api_url=api_url):
+                os.environ.update(
+                    {"SUTRO_API_KEY": "deployment-key", "SUTRO_API_URL": api_url}
+                )
+                client = Sutro()
+                with self.assertRaisesRegex(
+                    SutroConfigurationError,
+                    "Direct Sutro Batch API access is no longer supported",
+                ):
+                    client.do_request("GET", "list-jobs")
+        get.assert_not_called()
+
+    def test_customer_hosts_remain_supported_after_transport_normalization(self):
+        for api_url in (
+            "https://CUSTOMER.sutro.sh",
+            "https://customer.example.test:8443/v1",
+            "https://b\u00fccher.example.test",
+            "https://api.sutro.sh.customer.example.test",
+        ):
+            with self.subTest(api_url=api_url):
+                normalized = normalize_api_url(api_url)
+                self.assertTrue(normalized.endswith("/v1"))
 
     @unittest.skipUnless(os.name == "posix", "POSIX permission bits required")
     def test_persisted_config_is_owner_only(self):
