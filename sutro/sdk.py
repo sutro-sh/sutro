@@ -29,6 +29,7 @@ from sutro.observability import (
     _create_batch_traces,
     _has_open_batch_traces,
     _complete_batch_traces,
+    _traced_run,
 )
 from sutro.templates.classification import ClassificationTemplates
 from sutro.templates.embed import EmbeddingTemplates
@@ -48,6 +49,11 @@ JOB_DESCRIPTION_CHAR_LIMIT = 512
 # timeout bounds inactivity between streamed chunks, not the whole download.
 DOWNLOAD_REQUEST_TIMEOUT = (10, 120)
 
+# (connect, read) timeouts for a real-time Function run. The server answers or
+# fails the request within its own 90 s deadline; the read timeout sits just
+# above it so a stalled connection cannot leave the caller waiting forever.
+FUNCTION_RUN_REQUEST_TIMEOUT = (10, 100)
+
 # Initialize colorama (required for Windows)
 init()
 
@@ -61,6 +67,154 @@ SPINNER = Spinners.dots14
 
 class SutroConfigurationError(RuntimeError):
     """Raised when the SDK is used without deployment API configuration."""
+
+
+class SutroRateLimitError(requests.HTTPError):
+    """Raised when a Function run is rate limited (HTTP 429).
+
+    ``retry_after`` is the number of seconds the deployment asked the caller to
+    wait, taken from the ``Retry-After`` response header.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        retry_after: Optional[float] = None,
+        detail: Optional[str] = None,
+        code: Optional[str] = None,
+        request_id: Optional[str] = None,
+        response: Optional[requests.Response] = None,
+    ):
+        super().__init__(message, response=response)
+        self.retry_after = retry_after
+        self.detail = detail
+        self.code = code
+        self.request_id = request_id
+
+
+class SutroValidationError(requests.HTTPError):
+    """Raised when a Function run is rejected as invalid (HTTP 422).
+
+    ``detail`` names the offending input field or the reason the Function
+    cannot run, and ``code`` is the deployment's stable error code.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        detail: Optional[str] = None,
+        code: Optional[str] = None,
+        request_id: Optional[str] = None,
+        response: Optional[requests.Response] = None,
+    ):
+        super().__init__(message, response=response)
+        self.detail = detail
+        self.code = code
+        self.request_id = request_id
+
+
+class FunctionRunResult(dict):
+    """The result of a single :meth:`Sutro.run_function` call.
+
+    The full response payload is available as a dict; the documented fields are
+    also exposed as attributes.
+    """
+
+    @property
+    def output(self) -> Any:
+        """The Function's answer, parsed against its output schema."""
+        return self.get("output")
+
+    @property
+    def confidence(self) -> Optional[float]:
+        """The confidence score for this answer, between 0 and 1."""
+        return self.get("confidence")
+
+    @property
+    def usage(self) -> Dict[str, Any]:
+        """Token counts and cost for the request."""
+        return self.get("usage") or {}
+
+    @property
+    def request_id(self) -> Optional[str]:
+        """The deployment's ID for this request, for support and log lookups."""
+        return self.get("request_id")
+
+    @property
+    def function(self) -> Dict[str, Any]:
+        """The Function name, model, and model source."""
+        return self.get("function") or {}
+
+
+def _function_run_input(input_data: Union[dict, str, BaseModel]) -> Any:
+    """Normalize a ``run_function`` input into the JSON the API accepts."""
+    if isinstance(input_data, BaseModel):
+        return input_data.model_dump(mode="json")
+    if isinstance(input_data, (dict, str)):
+        return input_data
+    raise TypeError(
+        "run_function() input must be a dict, a string, or a pydantic model, "
+        f"not {type(input_data).__name__}."
+    )
+
+
+def _error_body(response: Optional[requests.Response]) -> Dict[str, Any]:
+    if response is None:
+        return {}
+    try:
+        body = response.json()
+    except (TypeError, ValueError, requests.exceptions.JSONDecodeError):
+        return {}
+    return body if isinstance(body, dict) else {}
+
+
+def _retry_after_seconds(response: Optional[requests.Response]) -> Optional[float]:
+    """Seconds to wait, from the ``Retry-After`` header when it is a delay."""
+    if response is None:
+        return None
+    header = (response.headers or {}).get("Retry-After")
+    if header is None:
+        return None
+    try:
+        return float(str(header).strip())
+    except ValueError:
+        # An HTTP-date Retry-After is legal but Sutro never sends one.
+        return None
+
+
+def _function_run_error(error: requests.HTTPError) -> requests.HTTPError:
+    """Map a Function run failure onto the exception the caller should see."""
+    response = error.response
+    status_code = response.status_code if response is not None else None
+    body = _error_body(response)
+    detail = body.get("detail") or str(error)
+    code = body.get("code")
+    request_id = body.get("request_id")
+
+    if status_code == 429:
+        return SutroRateLimitError(
+            detail,
+            retry_after=_retry_after_seconds(response),
+            detail=detail,
+            code=code,
+            request_id=request_id,
+            response=response,
+        )
+    if status_code == 422:
+        return SutroValidationError(
+            detail,
+            detail=detail,
+            code=code,
+            request_id=request_id,
+            response=response,
+        )
+
+    error.detail = detail
+    error.code = code
+    error.request_id = request_id
+    return error
 
 
 class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
@@ -699,21 +853,83 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
     def run_function(
         self,
         name: str,
-        input_data: Union[dict, BaseModel],
+        input_data: Union[dict, str, BaseModel],
         langsmith_metadata: Optional[Dict[str, Any]] = None,
         langsmith_tags: Optional[List[str]] = None,
-    ):
-        """Deprecated synchronous Function execution entry point.
-
-        Sutro deployments do not yet expose a synchronous serving proxy,
-        and the SDK will not send API keys to the legacy centralized serving
-        host. Use :meth:`batch_run_function` until that proxy is available.
+        timeout_seconds: Optional[float] = None,
+    ) -> FunctionRunResult:
         """
-        raise NotImplementedError(
-            "run_function() is temporarily unsupported through Sutro "
-            "deployments and will not contact the legacy serving host. Use "
-            "batch_run_function() instead."
+        Run a published Sutro Function on a single input and wait for the answer.
+
+        The Function supplies its prompt, model, output schema, and generation
+        defaults. Use :meth:`batch_run_function` instead for large tables: this
+        method makes one synchronous request per call and is rate limited.
+
+        Automatically traces to LangSmith when ``LANGSMITH_TRACING=true`` is set.
+
+        Args:
+            name (str): The name of the Sutro Function to run.
+            input_data (dict | str | BaseModel): The Function's input fields.
+                Keys must match the Function's configured inputs. Image and PDF
+                fields take an :class:`sutro.Asset` or :class:`sutro.Image`
+                value. A bare string is accepted when the Function has exactly
+                one text input.
+            langsmith_metadata (dict, optional): Additional metadata to attach to
+                the LangSmith trace. Only used when tracing is enabled.
+            langsmith_tags (list, optional): Tags to attach to the LangSmith trace
+                for filtering. Only used when tracing is enabled.
+            timeout_seconds (float, optional): How long to wait for the answer.
+                Defaults to just above the deployment's standard 90 s request
+                deadline; set it above a deployment's own deadline when that
+                has been raised.
+
+        Returns:
+            FunctionRunResult: The response payload, with ``output``,
+            ``confidence``, ``usage``, ``request_id``, and ``function``
+            available as attributes.
+
+        Raises:
+            SutroRateLimitError: The deployment is rate limiting this API key.
+                Wait ``retry_after`` seconds and try again.
+            SutroValidationError: The input does not match the Function, or the
+                Function cannot be run in real time on its current model.
+            requests.HTTPError: Any other API failure. ``detail``, ``code``, and
+                ``request_id`` are attached to the exception.
+        """
+        payload_input = _function_run_input(input_data)
+        timeout = (
+            FUNCTION_RUN_REQUEST_TIMEOUT
+            if timeout_seconds is None
+            else (FUNCTION_RUN_REQUEST_TIMEOUT[0], timeout_seconds)
         )
+
+        def _call(request_input: Any) -> Dict[str, Any]:
+            try:
+                # No automatic retries: the caller is waiting, and a Function
+                # run is not idempotent from the usage ledger's point of view.
+                response = self.do_request(
+                    "POST",
+                    f"functions/{name}/run",
+                    json={"input": request_input},
+                    max_retries=0,
+                    timeout=timeout,
+                )
+            except requests.HTTPError as e:
+                raise _function_run_error(e) from None
+            return response.json()
+
+        if _is_langsmith_tracing_enabled():
+            payload = _traced_run(
+                name,
+                _call,
+                payload_input,
+                langsmith_metadata,
+                langsmith_tags,
+            )
+        else:
+            payload = _call(payload_input)
+
+        return FunctionRunResult(payload)
 
     def batch_run_function(
         self,

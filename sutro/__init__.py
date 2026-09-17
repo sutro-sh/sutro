@@ -1,4 +1,11 @@
-from .sdk import Sutro
+from .assets import Asset, Image
+from .sdk import (
+    FunctionRunResult,
+    Sutro,
+    SutroConfigurationError,
+    SutroRateLimitError,
+    SutroValidationError,
+)
 
 # Create a singleton instance
 _instance = Sutro()
@@ -12,7 +19,15 @@ for attr in dir(_instance):
 # Sutro is already imported and available
 
 # Define __all__ for clean imports
-__all__ = ["Sutro"] + [
+__all__ = [
+    "Sutro",
+    "Asset",
+    "Image",
+    "FunctionRunResult",
+    "SutroConfigurationError",
+    "SutroRateLimitError",
+    "SutroValidationError",
+] + [
     attr
     for attr in dir(_instance)
     if callable(getattr(_instance, attr)) and not attr.startswith("_")

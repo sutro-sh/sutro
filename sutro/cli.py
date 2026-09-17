@@ -1,7 +1,9 @@
 from datetime import timezone
+import json
 import os
 
 import click
+import requests
 from colorama import Fore, Style
 from sutro.sdk import Sutro
 from sutro.validation import (
@@ -411,6 +413,53 @@ def quotas():
         + "To increase your quotas, contact us at team@sutro.sh."
         + Style.RESET_ALL
     )
+
+
+@cli.group()
+def functions():
+    """Run published Functions."""
+    pass
+
+
+def load_json_input(raw: str):
+    """Parse a --input value: JSON, or @path to a file holding JSON."""
+    source = raw
+    if raw.startswith("@"):
+        path = raw[1:]
+        try:
+            with open(path, "r") as handle:
+                source = handle.read()
+        except OSError as exc:
+            raise click.ClickException(f"Could not read {path}: {exc}") from exc
+    try:
+        return json.loads(source)
+    except ValueError as exc:
+        subject = (
+            f"{raw[1:]} does not contain"
+            if raw.startswith("@")
+            else "--input is not"
+        )
+        raise click.ClickException(f"{subject} valid JSON: {exc}") from exc
+
+
+@functions.command("run")
+@click.argument("name")
+@click.option(
+    "--input",
+    "input_value",
+    required=True,
+    help="Input fields as a JSON object, or @path/to/input.json.",
+)
+def run(name, input_value):
+    """Run a Function on one input and print the JSON response."""
+    payload = load_json_input(input_value)
+    sdk = get_sdk()
+    try:
+        result = sdk.run_function(name, payload)
+    except requests.HTTPError as exc:
+        # The deployment's own explanation is more useful than the status line.
+        raise click.ClickException(getattr(exc, "detail", None) or str(exc)) from exc
+    click.echo(json.dumps(dict(result), indent=2))
 
 
 @jobs.command()

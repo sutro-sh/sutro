@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 from click.testing import CliRunner
 
 from sutro.cli import check_auth, cli, get_sdk
+from sutro.sdk import FunctionRunResult, SutroValidationError
 
 
 class TestCliConfiguration(unittest.TestCase):
@@ -244,6 +245,91 @@ class TestCliConfiguration(unittest.TestCase):
         self.assertEqual(config["api_url"], "https://new.example.test/v1")
         self.assertNotIn("api_key", config)
         self.assertNotIn("base_url", config)
+
+
+class TestFunctionsRunCommand(unittest.TestCase):
+    def setUp(self):
+        self.environment = patch.dict(
+            os.environ,
+            {
+                "SUTRO_API_KEY": "environment-key",
+                "SUTRO_API_URL": "https://harmonize.example.test",
+            },
+            clear=True,
+        )
+        self.environment.start()
+        self.addCleanup(self.environment.stop)
+        self.runner = CliRunner()
+        self.payload = {
+            "request_id": "rt_abc",
+            "function": {"name": "pcr-checker", "revision": 7},
+            "output": {"label": "yes"},
+            "confidence": 0.8,
+            "usage": {"input_tokens": 12, "output_tokens": 3},
+        }
+
+    def test_run_prints_the_json_response(self):
+        sdk = MagicMock()
+        sdk.run_function.return_value = FunctionRunResult(self.payload)
+
+        with patch("sutro.cli.get_sdk", return_value=sdk):
+            result = self.runner.invoke(
+                cli,
+                ["functions", "run", "pcr-checker", "--input", '{"title": "a"}'],
+            )
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        sdk.run_function.assert_called_once_with("pcr-checker", {"title": "a"})
+        self.assertEqual(json.loads(result.output), self.payload)
+
+    def test_run_reads_input_from_a_file(self):
+        sdk = MagicMock()
+        sdk.run_function.return_value = FunctionRunResult(self.payload)
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "input.json"
+            path.write_text('{"title": "from file"}')
+
+            with patch("sutro.cli.get_sdk", return_value=sdk):
+                result = self.runner.invoke(
+                    cli,
+                    ["functions", "run", "pcr-checker", "--input", f"@{path}"],
+                )
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        sdk.run_function.assert_called_once_with(
+            "pcr-checker", {"title": "from file"}
+        )
+
+    def test_run_reports_the_server_detail_and_exits_non_zero(self):
+        sdk = MagicMock()
+        sdk.run_function.side_effect = SutroValidationError(
+            "Missing required input field(s): body.",
+            detail="Missing required input field(s): body.",
+            code="invalid_input",
+        )
+
+        with patch("sutro.cli.get_sdk", return_value=sdk):
+            result = self.runner.invoke(
+                cli,
+                ["functions", "run", "pcr-checker", "--input", '{"title": "a"}'],
+            )
+
+        self.assertNotEqual(result.exit_code, 0)
+        self.assertIn("Missing required input field(s): body.", result.output)
+
+    def test_run_rejects_input_that_is_not_json(self):
+        sdk = MagicMock()
+
+        with patch("sutro.cli.get_sdk", return_value=sdk):
+            result = self.runner.invoke(
+                cli,
+                ["functions", "run", "pcr-checker", "--input", "not json"],
+            )
+
+        self.assertNotEqual(result.exit_code, 0)
+        self.assertIn("valid JSON", result.output)
+        sdk.run_function.assert_not_called()
 
 
 if __name__ == "__main__":

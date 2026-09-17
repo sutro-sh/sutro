@@ -1,6 +1,7 @@
 import unittest
 import time
 from unittest.mock import patch, MagicMock, mock_open
+import json
 import os
 import shutil
 import sys
@@ -12,7 +13,15 @@ import requests
 
 from colorama import Fore, Style
 
-from sutro.sdk import Sutro
+from pydantic import BaseModel
+
+from sutro.assets import Asset, Image
+from sutro.sdk import (
+    FUNCTION_RUN_REQUEST_TIMEOUT,
+    Sutro,
+    SutroRateLimitError,
+    SutroValidationError,
+)
 from sutro.common import to_colored_text, prepare_input_data
 
 
@@ -1123,6 +1132,339 @@ class TestPresignedResultsDownload(unittest.TestCase):
             result = self.so.download_job_results("test-job")
 
         self.assertIsNone(result)
+
+
+class TestRunFunction(unittest.TestCase):
+    """Real-time Function execution: POST /v1/functions/{name}/run."""
+
+    def setUp(self):
+        self.so = Sutro(
+            api_key="test_api_key",
+            api_url="https://harmonize.example.test",
+        )
+
+    def _response(self, status_code, payload, headers=None):
+        response = MagicMock(spec=requests.Response)
+        response.status_code = status_code
+        response.headers = headers or {}
+        response.json.return_value = payload
+        if status_code >= 400:
+            response.raise_for_status.side_effect = requests.HTTPError(
+                f"{status_code} Error", response=response
+            )
+        else:
+            response.raise_for_status.return_value = None
+        return response
+
+    @patch("requests.post")
+    def test_run_function_success(self, mock_post):
+        mock_post.return_value = self._response(
+            200,
+            {
+                "request_id": "rt_abc",
+                "function": {
+                    "name": "pcr-checker",
+                    "model": "claude-sonnet-4-5",
+                    "model_source": "model-sweep",
+                },
+                "output": {"label": "yes", "reasoning": "because"},
+                "confidence": 0.8,
+                "usage": {
+                    "input_tokens": 4060,
+                    "output_tokens": 205,
+                    "cost_usd": 0.0155,
+                },
+            },
+        )
+
+        result = self.so.run_function("pcr-checker", {"title": "a", "body": "b"})
+
+        mock_post.assert_called_once()
+        self.assertEqual(
+            mock_post.call_args.args[0],
+            "https://harmonize.example.test/v1/functions/pcr-checker/run",
+        )
+        self.assertEqual(
+            mock_post.call_args.kwargs["headers"]["Authorization"],
+            "Key test_api_key",
+        )
+        self.assertEqual(
+            mock_post.call_args.kwargs["json"],
+            {"input": {"title": "a", "body": "b"}},
+        )
+
+        self.assertEqual(result.output, {"label": "yes", "reasoning": "because"})
+        self.assertEqual(result.confidence, 0.8)
+        self.assertEqual(result.usage["input_tokens"], 4060)
+        self.assertEqual(result.request_id, "rt_abc")
+        self.assertEqual(result.function["model"], "claude-sonnet-4-5")
+        # The payload itself stays available as a plain dict.
+        self.assertEqual(result["confidence"], 0.8)
+
+    @patch("requests.post")
+    def test_run_function_accepts_a_bare_string_input(self, mock_post):
+        mock_post.return_value = self._response(
+            200, {"request_id": "rt_1", "output": "yes", "confidence": 1.0}
+        )
+
+        result = self.so.run_function("pcr-checker", "one text field")
+
+        self.assertEqual(
+            mock_post.call_args.kwargs["json"], {"input": "one text field"}
+        )
+        self.assertEqual(result.output, "yes")
+        self.assertEqual(result.usage, {})
+
+    @patch("requests.post")
+    def test_run_function_serializes_pydantic_input(self, mock_post):
+        class Input(BaseModel):
+            title: str
+
+        mock_post.return_value = self._response(200, {"output": "ok"})
+
+        self.so.run_function("pcr-checker", Input(title="a"))
+
+        self.assertEqual(
+            mock_post.call_args.kwargs["json"], {"input": {"title": "a"}}
+        )
+
+    @patch("requests.post")
+    def test_run_function_does_not_retry(self, mock_post):
+        mock_post.return_value = self._response(
+            524, {"detail": "Timeout", "code": "timeout"}
+        )
+
+        with self.assertRaises(requests.HTTPError):
+            self.so.run_function("pcr-checker", {"title": "a"})
+
+        self.assertEqual(mock_post.call_count, 1)
+        # The caller is never left waiting on a stalled connection.
+        self.assertEqual(
+            mock_post.call_args.kwargs["timeout"], FUNCTION_RUN_REQUEST_TIMEOUT
+        )
+
+    @patch("requests.post")
+    def test_run_function_waits_as_long_as_the_caller_asks(self, mock_post):
+        mock_post.return_value = self._response(
+            524, {"detail": "Timeout", "code": "timeout"}
+        )
+
+        with self.assertRaises(requests.HTTPError):
+            self.so.run_function("pcr-checker", {"title": "a"}, timeout_seconds=300)
+
+        # A deployment whose deadline was raised needs a longer read timeout.
+        self.assertEqual(mock_post.call_args.kwargs["timeout"], (10, 300))
+
+    @patch("requests.post")
+    def test_run_function_rate_limited(self, mock_post):
+        mock_post.return_value = self._response(
+            429,
+            {
+                "detail": "Rate limit exceeded.",
+                "code": "rate_limited",
+                "request_id": "rt_429",
+            },
+            headers={"Retry-After": "3"},
+        )
+
+        with self.assertRaises(SutroRateLimitError) as caught:
+            self.so.run_function("pcr-checker", {"title": "a"})
+
+        error = caught.exception
+        self.assertEqual(error.retry_after, 3.0)
+        self.assertEqual(error.detail, "Rate limit exceeded.")
+        self.assertEqual(error.code, "rate_limited")
+        self.assertEqual(error.request_id, "rt_429")
+        self.assertIsInstance(error, requests.HTTPError)
+
+    @patch("requests.post")
+    def test_run_function_rate_limited_without_retry_after(self, mock_post):
+        mock_post.return_value = self._response(
+            429, {"detail": "Slow down.", "code": "rate_limited"}
+        )
+
+        with self.assertRaises(SutroRateLimitError) as caught:
+            self.so.run_function("pcr-checker", {"title": "a"})
+
+        self.assertIsNone(caught.exception.retry_after)
+
+    @patch("requests.post")
+    def test_run_function_validation_error(self, mock_post):
+        mock_post.return_value = self._response(
+            422,
+            {
+                "detail": "Missing required input field(s): body.",
+                "code": "invalid_input",
+                "request_id": "rt_422",
+            },
+        )
+
+        with self.assertRaises(SutroValidationError) as caught:
+            self.so.run_function("pcr-checker", {"title": "a"})
+
+        error = caught.exception
+        self.assertEqual(error.detail, "Missing required input field(s): body.")
+        self.assertEqual(error.code, "invalid_input")
+        self.assertEqual(error.request_id, "rt_422")
+        self.assertIn("body", str(error))
+
+    @patch("requests.post")
+    def test_run_function_other_api_errors_keep_the_server_detail(self, mock_post):
+        for status_code, code in (
+            (404, "function_not_found"),
+            (409, "no_runnable_prompt"),
+            (502, "provider_error"),
+            (503, "provider_not_configured"),
+            (504, "timeout"),
+        ):
+            with self.subTest(status_code=status_code):
+                mock_post.return_value = self._response(
+                    status_code,
+                    {
+                        "detail": f"{code} happened",
+                        "code": code,
+                        "request_id": "rt_err",
+                    },
+                )
+
+                with self.assertRaises(requests.HTTPError) as caught:
+                    self.so.run_function("pcr-checker", {"title": "a"})
+
+                error = caught.exception
+                self.assertNotIsInstance(error, SutroRateLimitError)
+                self.assertNotIsInstance(error, SutroValidationError)
+                self.assertEqual(error.detail, f"{code} happened")
+                self.assertEqual(error.code, code)
+                self.assertEqual(error.request_id, "rt_err")
+
+    @patch("requests.post")
+    def test_run_function_error_without_a_json_body(self, mock_post):
+        response = self._response(500, {})
+        response.json.side_effect = ValueError("no json")
+        mock_post.return_value = response
+
+        with self.assertRaises(requests.HTTPError) as caught:
+            self.so.run_function("pcr-checker", {"title": "a"})
+
+        self.assertIsNone(caught.exception.code)
+        self.assertIn("500", caught.exception.detail)
+
+    @patch("requests.post")
+    def test_run_function_sends_asset_values(self, mock_post):
+        mock_post.return_value = self._response(200, {"output": "ok"})
+
+        self.so.run_function(
+            "invoice-reader",
+            {
+                "note": "check page 2",
+                "scan": Asset.from_url("https://files.example.test/a.pdf"),
+                "photo": Image.from_bytes(b"\x89PNG\r\n\x1a\n", "image/png"),
+            },
+        )
+
+        sent = mock_post.call_args.kwargs["json"]["input"]
+        self.assertEqual(sent["scan"], {"url": "https://files.example.test/a.pdf"})
+        self.assertEqual(
+            sent["photo"],
+            {
+                "type": "image",
+                "base64": "iVBORw0KGgo=",
+                "mime_type": "image/png",
+            },
+        )
+        # The payload must survive JSON serialization unchanged.
+        self.assertEqual(json.loads(json.dumps(sent))["photo"], sent["photo"])
+
+    def test_run_function_rejects_unsupported_input_types(self):
+        with self.assertRaises(TypeError):
+            self.so.run_function("pcr-checker", ["a", "b"])
+
+
+class TestAssetHelpers(unittest.TestCase):
+    """The asset value shapes a deployment accepts on a Function input field."""
+
+    PNG = b"\x89PNG\r\n\x1a\n"
+
+    def test_image_from_bytes(self):
+        self.assertEqual(
+            Image.from_bytes(self.PNG, "image/png"),
+            {"type": "image", "base64": "iVBORw0KGgo=", "mime_type": "image/png"},
+        )
+
+    def test_image_from_bytes_normalizes_image_jpg(self):
+        self.assertEqual(
+            Image.from_bytes(b"\xff\xd8\xff", "image/jpg")["mime_type"],
+            "image/jpeg",
+        )
+
+    def test_image_from_bytes_rejects_a_pdf(self):
+        with self.assertRaises(ValueError):
+            Image.from_bytes(b"%PDF-1.4", "application/pdf")
+
+    def test_image_from_bytes_rejects_empty_bytes(self):
+        with self.assertRaises(ValueError):
+            Image.from_bytes(b"", "image/png")
+
+    def test_image_from_path(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "photo.png")
+            with open(path, "wb") as handle:
+                handle.write(self.PNG)
+
+            self.assertEqual(
+                Image.from_path(path),
+                {
+                    "type": "image",
+                    "base64": "iVBORw0KGgo=",
+                    "filename": "photo.png",
+                    "mime_type": "image/png",
+                },
+            )
+
+    def test_asset_from_path_reads_a_pdf(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "scan.pdf")
+            with open(path, "wb") as handle:
+                handle.write(b"%PDF-1.4")
+
+            asset = Asset.from_path(path)
+
+        self.assertEqual(asset["type"], "pdf")
+        self.assertEqual(asset["mime_type"], "application/pdf")
+        self.assertEqual(asset["filename"], "scan.pdf")
+
+    def test_asset_from_path_rejects_an_unknown_extension(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "notes.txt")
+            with open(path, "wb") as handle:
+                handle.write(b"hello")
+
+            with self.assertRaises(ValueError):
+                Asset.from_path(path)
+
+    def test_asset_from_url(self):
+        self.assertEqual(
+            Asset.from_url("https://files.example.test/a.pdf"),
+            {"url": "https://files.example.test/a.pdf"},
+        )
+
+    def test_image_from_url_declares_its_type(self):
+        self.assertEqual(
+            Image.from_url("https://files.example.test/a.png"),
+            {"type": "image", "url": "https://files.example.test/a.png"},
+        )
+
+    def test_asset_from_url_requires_https(self):
+        for url in ("http://files.example.test/a.pdf", "file:///etc/passwd", ""):
+            with self.subTest(url=url), self.assertRaises(ValueError):
+                Asset.from_url(url)
+
+    def test_asset_from_name(self):
+        self.assertEqual(Asset.from_name(" invoice.pdf "), {"name": "invoice.pdf"})
+
+    def test_asset_from_name_requires_a_name(self):
+        with self.assertRaises(ValueError):
+            Asset.from_name("  ")
 
 
 if __name__ == "__main__":

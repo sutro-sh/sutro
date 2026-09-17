@@ -902,11 +902,19 @@ class TestDeploymentRequestRouting(unittest.TestCase):
             api_key="configured-key",
             api_url="https://harmonize.example.test",
         )
+        response = MagicMock()
+        response.status_code = 200
+        response.headers = {}
+        response.json.return_value = {"output": "hello"}
+        post.return_value = response
 
-        with self.assertRaisesRegex(NotImplementedError, "batch_run_function"):
-            client.run_function("function-name", {"text": "hello"})
+        client.run_function("function-name", {"text": "hello"})
 
-        post.assert_not_called()
+        # Runs against the configured deployment, never a centralized host.
+        self.assertEqual(
+            post.call_args.args[0],
+            "https://harmonize.example.test/v1/functions/function-name/run",
+        )
 
 
 if __name__ == "__main__":
