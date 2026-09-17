@@ -1,4 +1,4 @@
-.PHONY: release build upload
+.PHONY: build install publish
 
 build:
 	@echo "Building the project..."
@@ -10,25 +10,12 @@ install:
 	$(MAKE) build
 	uv pip install $$(ls -t dist/*.whl | head -n 1) --force-reinstall
 
-upload:
-	@echo "Uploading to PyPI..."
-	python3 -m twine upload dist/*
-
-release:
-	@if [ -z "$(filter-out $@,$(MAKECMDGOALS))" ]; then \
-		echo "Error: version parameter is required. Usage: make release X.Y.Z"; \
-		exit 1; \
-	fi
-	@version=$(filter-out $@,$(MAKECMDGOALS)); \
-	echo "Checking version $$version..."; \
-	pyproject_version=$$(grep -m 1 'version = ' pyproject.toml | sed 's/version = //; s/"//g'); \
-	if [ "$$version" != "$$pyproject_version" ]; then \
-		echo "Error: Version mismatch. pyproject.toml version: $$pyproject_version, provided version: $$version"; \
-		exit 1; \
-	fi
-	@echo "Version check passed. Proceeding with release $$version..."
-	$(MAKE) build
-	$(MAKE) upload
-
-%:
-	@:
+# Called last by the root release target; also usable to retry just PyPI.
+publish:
+	@set -eu; \
+	  worktree_status="$$(git status --porcelain)"; \
+	  test -z "$$worktree_status" || { echo 'Publish from a clean, committed checkout.' >&2; exit 1; }; \
+	  release_dir="$$(mktemp -d)"; \
+	  trap 'rm -rf "$$release_dir"' EXIT; \
+	  uv build --out-dir "$$release_dir"; \
+	  uv publish "$$release_dir"/*
