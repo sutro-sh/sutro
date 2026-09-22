@@ -450,12 +450,19 @@ def load_json_input(raw: str):
     required=True,
     help="Input fields as a JSON object, or @path/to/input.json.",
 )
-def run(name, input_value):
+@click.option(
+    "--no-confidence-scoring",
+    is_flag=True,
+    help="Skip the confidence score.",
+)
+def run(name, input_value, no_confidence_scoring):
     """Run a Function on one input and print the JSON response."""
     payload = load_json_input(input_value)
     sdk = get_sdk()
     try:
-        result = sdk.run_function(name, payload)
+        result = sdk.run_function(
+            name, payload, confidence_scoring=not no_confidence_scoring
+        )
     except requests.HTTPError as exc:
         # The deployment's own explanation is more useful than the status line.
         raise click.ClickException(getattr(exc, "detail", None) or str(exc)) from exc

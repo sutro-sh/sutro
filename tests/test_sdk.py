@@ -1216,6 +1216,22 @@ class TestRunFunction(unittest.TestCase):
         self.assertEqual(result.usage, {})
 
     @patch("requests.post")
+    def test_run_function_can_turn_confidence_scoring_off(self, mock_post):
+        mock_post.return_value = self._response(
+            200, {"request_id": "rt_1", "output": "yes", "confidence": None}
+        )
+
+        result = self.so.run_function(
+            "pcr-checker", "one text field", confidence_scoring=False
+        )
+
+        self.assertEqual(
+            mock_post.call_args.kwargs["json"],
+            {"input": "one text field", "confidence_scoring": False},
+        )
+        self.assertIsNone(result.confidence)
+
+    @patch("requests.post")
     def test_run_function_serializes_pydantic_input(self, mock_post):
         class Input(BaseModel):
             title: str

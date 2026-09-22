@@ -129,7 +129,8 @@ class FunctionRunResult(dict):
 
     @property
     def confidence(self) -> Optional[float]:
-        """The confidence score for this answer, between 0 and 1."""
+        """The confidence score for this answer, between 0 and 1. ``None``
+        when the request was made with ``confidence_scoring=False``."""
         return self.get("confidence")
 
     @property
@@ -857,6 +858,7 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
         langsmith_metadata: Optional[Dict[str, Any]] = None,
         langsmith_tags: Optional[List[str]] = None,
         timeout_seconds: Optional[float] = None,
+        confidence_scoring: bool = True,
     ) -> FunctionRunResult:
         """
         Run a published Sutro Function on a single input and wait for the answer.
@@ -882,6 +884,9 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
                 Defaults to just above the deployment's standard 90 s request
                 deadline; set it above a deployment's own deadline when that
                 has been raised.
+            confidence_scoring (bool, optional): Whether to compute a
+                confidence score. On by default. When off, ``confidence``
+                is ``None``.
 
         Returns:
             FunctionRunResult: The response payload, with ``output``,
@@ -904,13 +909,18 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
         )
 
         def _call(request_input: Any) -> Dict[str, Any]:
+            body: Dict[str, Any] = {"input": request_input}
+            # Sent only when off, so the default still works against a
+            # deployment that predates the field.
+            if not confidence_scoring:
+                body["confidence_scoring"] = False
             try:
                 # No automatic retries: the caller is waiting, and a Function
                 # run is not idempotent from the usage ledger's point of view.
                 response = self.do_request(
                     "POST",
                     f"functions/{name}/run",
-                    json={"input": request_input},
+                    json=body,
                     max_retries=0,
                     timeout=timeout,
                 )
