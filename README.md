@@ -53,11 +53,10 @@ uv pip install sutro
 
 ### Authenticate
 
-Create a deployment API key from the **API Keys** panel in your Sutro UI,
-then configure the SDK with your deployment URL and key:
+Create a [deployment API key](https://docs.sutro.sh/reference/authentication#manage-deployment-api-keys)
+in your Sutro deployment and copy the key when it is created.
 
-If the panel is not visible, contact the Sutro team at
-[team@sutro.sh](mailto:team@sutro.sh) to create a key for you.
+Configure the SDK with your deployment URL and key:
 
 ```bash
 export SUTRO_API_URL="https://your-sutro-deployment.example.com"
