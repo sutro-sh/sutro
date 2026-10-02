@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import requests
 from click.testing import CliRunner
 
 from sutro.cli import check_auth, cli, get_sdk
@@ -279,7 +280,9 @@ class TestFunctionsRunCommand(unittest.TestCase):
             )
 
         self.assertEqual(result.exit_code, 0, result.output)
-        sdk.run_function.assert_called_once_with("pcr-checker", {"title": "a"})
+        sdk.run_function.assert_called_once_with(
+            "pcr-checker", {"title": "a"}, confidence_scoring=True
+        )
         self.assertEqual(json.loads(result.output), self.payload)
 
     def test_run_reads_input_from_a_file(self):
@@ -298,8 +301,39 @@ class TestFunctionsRunCommand(unittest.TestCase):
 
         self.assertEqual(result.exit_code, 0, result.output)
         sdk.run_function.assert_called_once_with(
-            "pcr-checker", {"title": "from file"}
+            "pcr-checker", {"title": "from file"}, confidence_scoring=True
         )
+
+    def test_run_confidence_scoring_request_and_response(self):
+        for scoring in (True, False):
+            with self.subTest(confidence_scoring=scoring):
+                payload = dict(self.payload, confidence=0.8 if scoring else None)
+                response = requests.Response()
+                response.status_code = 200
+                response._content = json.dumps(payload).encode()
+                arguments = [
+                    "functions", "run", "pcr-checker", "--input", '{"title": "a"}'
+                ]
+                if not scoring:
+                    arguments.append("--no-confidence-scoring")
+
+                with (
+                    patch("sutro.sdk.check_version"),
+                    patch("requests.post", return_value=response) as post,
+                ):
+                    result = self.runner.invoke(cli, arguments)
+
+                self.assertEqual(result.exit_code, 0, result.output)
+                post.assert_called_once()
+                self.assertEqual(
+                    post.call_args.args[0],
+                    "https://harmonize.example.test/v1/functions/pcr-checker/run",
+                )
+                expected_request = {"input": {"title": "a"}}
+                if not scoring:
+                    expected_request["confidence_scoring"] = False
+                self.assertEqual(post.call_args.kwargs["json"], expected_request)
+                self.assertEqual(json.loads(result.output), payload)
 
     def test_run_reports_the_server_detail_and_exits_non_zero(self):
         sdk = MagicMock()
