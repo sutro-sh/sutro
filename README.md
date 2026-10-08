@@ -33,7 +33,7 @@ Typical Functions include:
 
 ### Sutro Batch
 
-Sutro Batch is serverless async inference for high-volume AI workloads. Run Sutro Functions or pre-trained open-source LLMs over large datasets with simple usage-based pricing, DataFrame-friendly inputs and outputs, live observability, and result downloads.
+Sutro Batch is serverless async inference for high-volume AI workloads. Run Sutro Functions or pre-trained open-source LLMs over large datasets with [machine-time pricing in GPU-hours](https://docs.sutro.sh/batch/production#machine-time-pricing), DataFrame-friendly inputs and outputs, live observability, and result downloads.
 
 Batch is best when latency is less important than quality, cost, throughput, and reproducibility.
 
@@ -180,7 +180,7 @@ Sutro supports two Batch priorities today:
 - `job_priority=0`: prototyping jobs for smaller runs and fast iteration
 - `job_priority=1`: production jobs for larger workloads and higher quotas
 
-Before running a large job, use `dry_run=True` to create an estimate job. The SDK waits for and prints the estimate, then returns its job ID. This does not launch the normal full job, but sufficiently large priority-1 estimates run inference on an approximately 1-million-token prefix sample.
+Before running a large job, use `dry_run=True` to create an estimate job. The SDK waits for and prints the estimate, then returns its job ID. This does not launch the full workload; sufficiently large priority-1 estimates measure inference time on a small sample and extrapolate the charge at the job's saved hourly rate.
 
 ```python
 import polars as pl

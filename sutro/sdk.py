@@ -135,7 +135,7 @@ class FunctionRunResult(dict):
 
     @property
     def usage(self) -> Dict[str, Any]:
-        """Token counts and cost for the request."""
+        """Provider-reported input/output counts and estimated provider cost."""
         return self.get("usage") or {}
 
     @property
