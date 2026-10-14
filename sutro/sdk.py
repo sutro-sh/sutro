@@ -1470,7 +1470,10 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
             with_original_df (pd.DataFrame | pl.DataFrame, optional): Original DataFrame to concatenate with results. Defaults to None.
             output_column (str, optional): Name of the output column. Defaults to "inference_result".
             disable_cache (bool, optional): Whether to disable the cache. Defaults to False.
-            unpack_json (bool, optional): If the output_column is formatted as a JSON string, decides whether to unpack the top level JSON fields in the results into separate columns. Defaults to True.
+            unpack_json (bool, optional): If the output_column is formatted as a JSON string, decides whether to unpack JSON fields into separate columns, including structured content from reasoning models. Defaults to True.
+
+        Raises:
+            ValueError: Expanded JSON fields conflict with existing result or original DataFrame columns, or with each other. Set unpack_json=False to retain raw outputs.
 
         Returns:
             Union[pl.DataFrame, pd.DataFrame]: The results as a DataFrame. By default, returns polars.DataFrame; when with_original_df is an instance of pandas.DataFrame, returns pandas.DataFrame.
@@ -1592,51 +1595,62 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
             if include and col in results_df.columns
         ]
 
-        results_df = results_df.select(columns_to_keep)
+        # Column names supplied by users are literal, including '*' and regexes.
+        results_df = results_df[columns_to_keep]
 
         if unpack_json:
             try:
-                first_row = json.loads(
-                    results_df.head(1)[output_column][0]
-                )  # checks if the first row can be json decoded
-                json_decoded_fields = first_row.keys()
-            except Exception:
-                # if the first row cannot be json decoded, do nothing
-                pass
-            else:
-                conflicting_fields = sorted(
-                    set(json_decoded_fields) & set(results_df.columns)
+                # Decode separately so failed parsing cannot partially change results.
+                # Infer every row's fields, including those absent from the first row.
+                decoded = results_df[output_column].str.json_decode(
+                    infer_schema_length=None
                 )
+            except (pl.exceptions.PolarsError, TypeError):
+                decoded = None
+
+            if decoded is not None and isinstance(decoded.dtype, pl.Struct):
+                fields = {field.name: field.dtype for field in decoded.dtype.fields}
+                # Unnest into Series so names such as '*' or '^x$' remain literal
+                # JSON properties instead of Polars wildcard or regex selectors.
+                expanded = decoded.struct.unnest()
+                expanded_fields = list(expanded.iter_columns())
+                if set(fields) == {"content", "reasoning_content"} and isinstance(
+                    fields["content"], pl.Struct
+                ):
+                    expanded_fields = [
+                        expanded.get_column("reasoning_content"),
+                        *expanded.get_column("content").struct.unnest().iter_columns(),
+                    ]
+
+                # Validate final destinations, including nested reasoning fields,
+                # before adding or dropping any columns. Original inputs must also
+                # be protected when the caller requests concatenation.
+                existing_columns = set(results_df.columns)
+                if with_original_df is not None:
+                    existing_columns.update(with_original_df.columns)
+                conflicting_fields = set()
+                for field in expanded_fields:
+                    name = field.name
+                    if name in existing_columns:
+                        conflicting_fields.add(name)
+                    existing_columns.add(name)
                 if conflicting_fields:
                     raise ValueError(
                         "Cannot unpack structured output fields that conflict with "
-                        "existing result columns: "
-                        f"{', '.join(conflicting_fields)}. Set unpack_json=False "
+                        "existing columns or other expanded fields: "
+                        f"{', '.join(sorted(conflicting_fields))}. Set unpack_json=False "
                         "to preserve the metadata and raw structured output."
                     )
 
-                try:
-                    results_df = results_df.map_columns(
-                        output_column, lambda s: s.str.json_decode()
-                    )
-                    for field in json_decoded_fields:
-                        results_df = results_df.with_columns(
-                            pl.col(output_column).struct.field(field).alias(field)
-                        )
-                    if sorted(list(set(json_decoded_fields))) == [
-                        "content",
-                        "reasoning_content",
-                    ]:  # if it's a reasoning model, we need to unpack the content field
-                        content_keys = results_df.head(1)["content"][0].keys()
-                        for key in content_keys:
-                            results_df = results_df.with_columns(
-                                pl.col("content").struct.field(key).alias(key)
-                            )
-                        results_df = results_df.drop("content")
-                    results_df = results_df.drop(output_column)
-                except Exception:
-                    # if the output column cannot be unpacked, do nothing
-                    pass
+                # Empty objects have no columns to carry their row count. Keep
+                # the raw output when expansion has no destination fields.
+                if expanded_fields:
+                    retained_fields = [
+                        field
+                        for field in results_df.iter_columns()
+                        if field.name != output_column
+                    ]
+                    results_df = pl.DataFrame([*retained_fields, *expanded_fields])
 
         # Handle concatenation with original DataFrame
         if with_original_df is not None:
