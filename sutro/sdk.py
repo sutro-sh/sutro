@@ -1459,6 +1459,7 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
         output_column: str = "inference_result",
         disable_cache: bool = False,
         unpack_json: bool = True,
+        unwrap_reasoning: bool = False,
     ) -> pl.DataFrame | pd.DataFrame:
         """
         Get the results of a job by its ID.
@@ -1472,10 +1473,12 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
             with_original_df (pd.DataFrame | pl.DataFrame, optional): Original DataFrame to concatenate with results. Defaults to None.
             output_column (str, optional): Name of the output column. Defaults to "inference_result".
             disable_cache (bool, optional): Whether to disable the cache. Defaults to False.
-            unpack_json (bool, optional): If the output_column is formatted as a JSON string, decides whether to unpack JSON fields into separate columns, including structured content from reasoning models. Defaults to True.
+            unpack_json (bool, optional): If the output_column is formatted as a JSON string, decides whether to unpack JSON fields into separate columns. Defaults to True. Customer JSON property names are preserved.
+            unwrap_reasoning (bool, optional): Explicitly flatten legacy reasoning envelopes with structured content. Defaults to False because customer JSON can have the same shape. Ignored when unpack_json=False.
 
         Raises:
             ValueError: Expanded JSON fields conflict with existing result or original DataFrame columns, or with each other. Set unpack_json=False to retain raw outputs.
+            ValueError: Result columns conflict with original DataFrame columns, the row counts differ, or output_column conflicts with response metadata. Only carried metadata with identical values and types may overlap original columns.
 
         Returns:
             Union[pl.DataFrame, pd.DataFrame]: The results as a DataFrame. By default, returns polars.DataFrame; when with_original_df is an instance of pandas.DataFrame, returns pandas.DataFrame.
@@ -1651,11 +1654,13 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
             ("confidence_score", "confidence_score" in results_df.columns),
         ]
 
-        columns_to_keep = [
-            col
-            for col, include in column_config
-            if include and col in results_df.columns
-        ]
+        columns_to_keep = list(
+            dict.fromkeys(
+                col
+                for col, include in column_config
+                if include and col in results_df.columns
+            )
+        )
 
         # Column names supplied by users are literal, including '*' and regexes.
         results_df = results_df[columns_to_keep]
@@ -1676,8 +1681,10 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
                 # JSON properties instead of Polars wildcard or regex selectors.
                 expanded = decoded.struct.unnest()
                 expanded_fields = list(expanded.iter_columns())
-                if set(fields) == {"content", "reasoning_content"} and isinstance(
-                    fields["content"], pl.Struct
+                if (
+                    unwrap_reasoning
+                    and set(fields) == {"content", "reasoning_content"}
+                    and isinstance(fields["content"], pl.Struct)
                 ):
                     expanded_fields = [
                         expanded.get_column("reasoning_content"),
@@ -1714,23 +1721,48 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
                     ]
                     results_df = pl.DataFrame([*retained_fields, *expanded_fields])
 
-        # Handle concatenation with original DataFrame
-        if with_original_df is not None:
+        if isinstance(with_original_df, (pl.DataFrame, pd.DataFrame)):
+            if len(with_original_df) != results_df.height:
+                raise ValueError(
+                    "The original DataFrame and job results must have the same row count."
+                )
+            original_pl = (
+                pl.from_pandas(with_original_df)
+                if isinstance(with_original_df, pd.DataFrame)
+                else with_original_df
+            )
+            # The API carries ID/metadata columns alongside outputs. An identical
+            # carried column can be retained from the original, but outputs and
+            # diagnostics are always separate destinations, even if values match.
+            overlapping = set(original_pl.columns).intersection(results_df.columns)
+            conflicting_columns = [
+                name
+                for name in overlapping
+                if name not in metadata_columns
+                or not original_pl.get_column(name).equals(
+                    results_df.get_column(name), check_dtypes=True
+                )
+            ]
+            if conflicting_columns:
+                raise ValueError(
+                    "Job result columns conflict with the original DataFrame: "
+                    f"{', '.join(sorted(conflicting_columns))}. Rename the conflicting "
+                    "original columns, or retrieve results without with_original_df "
+                    "and merge explicitly."
+                )
+            new_fields = [
+                field
+                for field in results_df.iter_columns()
+                if field.name not in overlapping
+            ]
             if isinstance(with_original_df, pd.DataFrame):
-                # Convert to polars for consistent handling
-                original_pl = pl.from_pandas(with_original_df)
-
-                combined_df = original_pl.with_columns(results_df)
-
-                # Convert back to pandas to match input type
-                return combined_df.to_pandas()
-
-            elif isinstance(with_original_df, pl.DataFrame):
-                return with_original_df.with_columns(results_df)
-
-        # Return pd.DataFrame type when appropriate
-        if with_original_df is None and isinstance(with_original_df, pd.DataFrame):
-            return results_df.to_pandas()
+                # Append positionally, retaining the original index and dtypes.
+                combined_df = with_original_df.copy()
+                if new_fields:
+                    for name, values in pl.DataFrame(new_fields).to_pandas().items():
+                        combined_df[name] = values.array
+                return combined_df
+            return original_pl.hstack(new_fields)
 
         return results_df
 
@@ -2124,6 +2156,7 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
         obtain_results: bool = True,
         output_column: str = "inference_result",
         is_cost_estimate: bool = False,
+        unwrap_reasoning: bool = False,
     ) -> pl.DataFrame | None:
         """
         Waits for job completion to occur and then returns the results upon
@@ -2134,6 +2167,7 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
         Args:
             job_id (str): The ID of the job to await.
             timeout (Optional[int]): The max time in seconds the function should wait for job results for. Default is 7200 (2 hours).
+            unwrap_reasoning (bool): Pass True to flatten legacy reasoning envelopes when retrieving results.
 
         Returns:
             pl.DataFrame: The results of the job in a polars DataFrame.
@@ -2173,7 +2207,9 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
                             )
                         )
                         results = self.get_job_results(
-                            job_id, output_column=output_column
+                            job_id,
+                            output_column=output_column,
+                            **({"unwrap_reasoning": True} if unwrap_reasoning else {}),
                         )
                     break
                 if status == JobStatus.FAILED:

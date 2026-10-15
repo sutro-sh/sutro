@@ -234,6 +234,20 @@ The SDK accepts:
 
 Results preserve input order. SDK result helpers return Polars DataFrames by default and can join results back to the original Pandas or Polars DataFrame.
 
+Structured JSON results preserve customer properties, including objects named
+`content` alongside `reasoning_content`. Reasoning envelopes are no longer
+flattened automatically because that shape can also be valid customer data.
+For jobs whose outputs are known legacy reasoning envelopes, opt in to the
+previous flattening behavior:
+
+```python
+results = so.get_job_results(job_id, unwrap_reasoning=True)
+# Also supported by so.await_job_completion(job_id, unwrap_reasoning=True).
+```
+
+Use `unpack_json=False` to retain the original output strings. These options
+apply equally to cached and freshly fetched results.
+
 ## More SDK Patterns
 
 ### Multi-model comparison

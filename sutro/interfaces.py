@@ -63,6 +63,7 @@ class BaseSutroClient:
         obtain_results: bool = True,
         output_column: str = "inference_result",
         is_cost_estimate: bool = False,
+        unwrap_reasoning: bool = False,
     ) -> pl.DataFrame | None: ...
 
 

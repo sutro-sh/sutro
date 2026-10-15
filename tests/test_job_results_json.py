@@ -35,12 +35,73 @@ class TestJobResultsJson(unittest.TestCase):
         )
 
     def get_results(self, outputs, metadata=None, **kwargs):
+        # Existing reasoning tests explicitly exercise the legacy flattening mode.
+        kwargs.setdefault("unwrap_reasoning", True)
         response = MagicMock(status_code=200)
         response.json.return_value = {
             "results": {"outputs": outputs, **(metadata or {})}
         }
         with patch.object(self.client, "do_request", return_value=response):
             return self.client.get_job_results("job", disable_cache=True, **kwargs)
+
+    def test_customer_content_object_is_preserved_by_default(self):
+        output = {
+            "content": {"label": "customer value"},
+            "reasoning_content": "customer note",
+        }
+        response = MagicMock(status_code=200)
+        response.json.return_value = {"results": {"outputs": [json.dumps(output)]}}
+        with patch.object(self.client, "do_request", return_value=response) as request:
+            result = self.client.get_job_results("job", disable_cache=True)
+        self.assertEqual(result.to_dicts(), [output])
+        request.assert_called_once()
+
+    def test_explicit_reasoning_option_preserves_legacy_flattening(self):
+        output = {"content": {"label": "yes"}, "reasoning_content": "provider thoughts"}
+        raw = self.get_results([json.dumps(output)], unwrap_reasoning=False)
+        self.assertEqual(raw.to_dicts(), [output])
+        unwrapped = self.get_results([json.dumps(output)], unwrap_reasoning=True)
+        self.assertEqual(
+            unwrapped.to_dicts(),
+            [{"label": "yes", "reasoning_content": "provider thoughts"}],
+        )
+        untouched = self.get_results(
+            [json.dumps(output)], unpack_json=False, unwrap_reasoning=True
+        )
+        self.assertEqual(untouched["inference_result"].to_list(), [json.dumps(output)])
+
+    def test_reasoning_option_is_applied_after_loading_raw_cache(self):
+        output = {"content": {"label": "yes"}, "reasoning_content": "provider thoughts"}
+        response = MagicMock(status_code=200)
+        response.json.return_value = {"results": {"outputs": [json.dumps(output)]}}
+        with patch.object(self.client, "do_request", return_value=response):
+            self.assertEqual(self.client.get_job_results("job").to_dicts(), [output])
+        cached = pl.read_parquet(self.client._job_results_cache_file_path("job"))
+        self.assertEqual(cached.rows(), [(json.dumps(output),)])
+        with patch.object(
+            self.client,
+            "do_request",
+            side_effect=AssertionError("Cache must satisfy this lookup"),
+        ):
+            self.assertEqual(
+                self.client.get_job_results("job", unwrap_reasoning=True).to_dicts(),
+                [{"label": "yes", "reasoning_content": "provider thoughts"}],
+            )
+            self.assertEqual(self.client.get_job_results("job").to_dicts(), [output])
+
+    def test_completion_helper_forwards_explicit_reasoning_option(self):
+        with patch.object(
+            self.client, "_fetch_job_status", return_value="SUCCEEDED"
+        ), patch.object(
+            self.client,
+            "get_job_results",
+            return_value=pl.DataFrame({"label": ["yes"]}),
+        ) as results:
+            actual = self.client.await_job_completion("job", unwrap_reasoning=True)
+        results.assert_called_once_with(
+            "job", output_column="inference_result", unwrap_reasoning=True
+        )
+        self.assertEqual(actual.to_dicts(), [{"label": "yes"}])
 
     def test_reasoning_output_cannot_replace_source_id_or_metadata(self):
         for field in ("customer_id", "source_record"):
