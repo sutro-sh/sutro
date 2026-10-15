@@ -54,6 +54,8 @@ DOWNLOAD_REQUEST_TIMEOUT = (10, 120)
 # above it so a stalled connection cannot leave the caller waiting forever.
 FUNCTION_RUN_REQUEST_TIMEOUT = (10, 100)
 
+_JOB_RESULTS_CACHE_METADATA_KEY = b"sutro.job_results"
+
 # Initialize colorama (required for Windows)
 init()
 
@@ -1481,25 +1483,54 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
 
         cache_file_path = self._job_results_cache_file_path(job_id)
         self._remove_legacy_job_results_cache_file(job_id)
-        expected_columns = {output_column}
-        if include_inputs:
-            expected_columns.add("inputs")
-        if include_cumulative_logprobs:
-            expected_columns.add("cumulative_logprobs")
-        cached_contains_expected_columns = False
-        if os.path.exists(cache_file_path):
-            cached_columns = set(pq.read_schema(cache_file_path).names)
-            cached_contains_expected_columns = expected_columns.issubset(
-                cached_columns
-            )
+        cache_is_compatible = False
+        if not disable_cache and os.path.exists(cache_file_path):
+            try:
+                schema = pq.read_schema(cache_file_path)
+                cache_info = json.loads(
+                    (schema.metadata or {}).get(_JOB_RESULTS_CACHE_METADATA_KEY, b"{}")
+                )
+                # Column names alone cannot identify cached model outputs: a
+                # carried ID may have any non-reserved name, including the
+                # caller's output_column. Only reuse explicitly marked raw API
+                # results with the requested optional-data capabilities.
+                cache_is_compatible = (
+                    isinstance(cache_info, dict)
+                    and cache_info.get("version") == 1
+                    and cache_info.get("output_key") == "outputs"
+                    and "outputs" in schema.names
+                    and isinstance(cache_info.get("include_inputs"), bool)
+                    and isinstance(cache_info.get("include_cumulative_logprobs"), bool)
+                    and (not include_inputs or cache_info["include_inputs"])
+                    and (
+                        not include_cumulative_logprobs
+                        or cache_info["include_cumulative_logprobs"]
+                    )
+                )
+            except (OSError, ValueError, TypeError):
+                # Unmarked, malformed, or unreadable entries must be fetched
+                # again; never guess which old column contains model outputs.
+                cache_is_compatible = False
 
         # Check if open LangSmith traces exist for this job (created at
         # submission time via batch_run_function). If so, we'll complete
         # them with outputs once results are available.
         has_open_traces = _has_open_batch_traces(job_id)
 
+        requested_optional_columns = {
+            "inputs": include_inputs,
+            "cumulative_logprobs": include_cumulative_logprobs,
+        }
+        source_optional_columns = (
+            {
+                "inputs": cache_info["include_inputs"],
+                "cumulative_logprobs": cache_info["include_cumulative_logprobs"],
+            }
+            if cache_is_compatible
+            else requested_optional_columns
+        )
         raw_outputs = None
-        if not disable_cache and cached_contains_expected_columns:
+        if cache_is_compatible:
             with yaspin(
                 SPINNER,
                 text=to_colored_text(f"Loading results from cache: {cache_file_path}"),
@@ -1510,13 +1541,7 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
                     to_colored_text("✔ Results loaded from cache", state="success")
                 )
                 if has_open_traces:
-                    # The cache stores the renamed output column, not the raw
-                    # API "outputs" key.
-                    raw_outputs = (
-                        results_df[output_column].to_list()
-                        if output_column in results_df.columns
-                        else None
-                    )
+                    raw_outputs = results_df["outputs"].to_list()
         else:
             payload = {
                 "job_id": job_id,
@@ -1550,14 +1575,50 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
                 raw_outputs = response_data["results"].get("outputs", [])
 
             results_df = pl.DataFrame(response_data["results"])
-            results_df = results_df.rename({"outputs": output_column})
 
             if not disable_cache:
                 os.makedirs(os.path.dirname(cache_file_path), exist_ok=True)
-                results_df.write_parquet(cache_file_path, compression="snappy")
+                # Cache the unrenamed API columns and their provenance so any
+                # later output_column can be applied without reinterpreting IDs.
+                table = results_df.to_arrow()
+                cache_info = {
+                    "version": 1,
+                    "output_key": "outputs",
+                    "include_inputs": include_inputs,
+                    "include_cumulative_logprobs": include_cumulative_logprobs,
+                }
+                metadata = {
+                    **(table.schema.metadata or {}),
+                    _JOB_RESULTS_CACHE_METADATA_KEY: json.dumps(cache_info).encode(
+                        "utf-8"
+                    ),
+                }
+                pq.write_table(
+                    table.replace_schema_metadata(metadata),
+                    cache_file_path,
+                    compression="snappy",
+                )
                 spinner.write(
                     to_colored_text("✔ Results saved to cache", state="success")
                 )
+
+        # Remove only optional diagnostics whose provenance is known. A column
+        # returned when its include flag was false may instead be carried metadata.
+        results_df = results_df.drop(
+            [
+                name
+                for name, included in source_optional_columns.items()
+                if included
+                and not requested_optional_columns[name]
+                and name in results_df.columns
+            ]
+        )
+        if output_column != "outputs" and output_column in results_df.columns:
+            raise ValueError(
+                f"output_column {output_column!r} conflicts with response metadata. "
+                "Choose a different output_column to preserve both columns."
+            )
+        results_df = results_df.rename({"outputs": output_column})
 
         # Complete LangSmith traces with outputs regardless of source is cache or API request
         if has_open_traces and raw_outputs is not None:
@@ -1571,11 +1632,12 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
             )
             print(to_colored_text(f"📊 LangSmith traces completed for {job_id}"))
         standard_columns = {
-            "inputs",
             output_column,
-            "cumulative_logprobs",
             "confidence_score",
         }
+        standard_columns.update(
+            name for name, included in source_optional_columns.items() if included
+        )
         metadata_columns = [
             column for column in results_df.columns if column not in standard_columns
         ]

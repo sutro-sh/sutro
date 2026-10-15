@@ -3,8 +3,6 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import polars as pl
-
 from sutro.sdk import Sutro
 
 
@@ -195,25 +193,28 @@ class TestIdColumn(unittest.TestCase):
         client = sutro_client()
         with tempfile.TemporaryDirectory() as temp_dir:
             cache_path = Path(temp_dir) / "job-123.snappy.parquet"
-            pl.DataFrame(
-                {
+            response = MagicMock(status_code=200)
+            response.json.return_value = {
+                "results": {
                     "experience_id": [101, 102],
-                    "inference_result": ["result-1", "result-2"],
+                    "outputs": ["result-1", "result-2"],
                 }
-            ).write_parquet(cache_path)
+            }
 
             with (
-                patch(
-                    "sutro.sdk.os.path.expanduser",
-                    return_value=str(cache_path),
+                patch.object(
+                    client, "_job_results_cache_file_path", return_value=str(cache_path)
                 ),
+                patch.object(client, "_remove_legacy_job_results_cache_file"),
                 patch("sutro.sdk._has_open_batch_traces", return_value=False),
-                patch.object(client, "do_request") as do_request,
             ):
-                results = client.get_job_results(
-                    "job-123",
-                    unpack_json=False,
-                )
+                with patch.object(client, "do_request", return_value=response):
+                    client.get_job_results("job-123", unpack_json=False)
+                with patch.object(client, "do_request") as do_request:
+                    results = client.get_job_results(
+                        "job-123",
+                        unpack_json=False,
+                    )
 
         do_request.assert_not_called()
         self.assertEqual(
