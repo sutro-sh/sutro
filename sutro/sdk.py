@@ -24,6 +24,7 @@ from sutro.common import (
     BASE_OUTPUT_COLOR,
 )
 from sutro.interfaces import JobStatus
+from sutro._attached_requests import get_auxiliary_json
 from sutro.observability import (
     _is_langsmith_tracing_enabled,
     _create_batch_traces,
@@ -44,6 +45,12 @@ from sutro.validation import (
 
 JOB_NAME_CHAR_LIMIT = 45
 JOB_DESCRIPTION_CHAR_LIMIT = 512
+
+# Match the two-hour polling window used by the attached job-start wait.
+ATTACHED_JOB_COMPLETION_TIMEOUT = 7200
+
+# Bound auxiliary status and failure-detail lookups during attached inference.
+ATTACHED_JOB_LOOKUP_REQUEST_TIMEOUT = (10, 30)
 
 # (connect, read) timeouts for direct requests to presigned URLs. The read
 # timeout bounds inactivity between streamed chunks, not the whole download.
@@ -636,85 +643,128 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
             )
             # TODO: Restore a deployment-local batch UI link when Sutro
             # deployments expose one.
-            started = self._await_job_start(job_id)
-            if not started:
-                failure_reason = self._get_failure_reason(job_id)
-                spinner.write(
-                    to_colored_text(
-                        f"Failure reason: {failure_reason['message']}", "fail"
+            status = self._await_job_start(job_id)
+            if status not in (
+                JobStatus.STARTING,
+                JobStatus.RUNNING,
+                JobStatus.SUCCEEDED,
+            ):
+                if status in (JobStatus.FAILED, JobStatus.CANCELLED):
+                    self._report_attached_job_failure(job_id, status, spinner)
+                else:
+                    message = (
+                        "Stopped waiting for job start. "
+                        f"Use `so.get_job_status('{job_id}')` to check the job."
                     )
-                )
+                    spinner.write(to_colored_text(message, "fail"))
                 return None
 
+            success = status == JobStatus.SUCCEEDED
             pbar = None
 
-            try:
-                with self.do_request(
-                    "GET",
-                    f"/stream-job-progress/{job_id}",
-                    stream=True,
-                ) as streaming_response:
-                    streaming_response.raise_for_status()
-                    spinner = yaspin(
-                        SPINNER,
-                        text=to_colored_text("Awaiting status updates..."),
-                        color=BASE_OUTPUT_COLOR,
-                    )
-                    spinner.start()
+            if not success:
+                try:
+                    with self.do_request(
+                        "GET",
+                        f"/stream-job-progress/{job_id}",
+                        stream=True,
+                    ) as streaming_response:
+                        streaming_response.raise_for_status()
+                        spinner = yaspin(
+                            SPINNER,
+                            text=to_colored_text("Awaiting status updates..."),
+                            color=BASE_OUTPUT_COLOR,
+                        )
+                        spinner.start()
 
-                    token_state = {
-                        "input_tokens": 0,
-                        "output_tokens": 0,
-                        "total_tokens_processed_per_second": 0,
-                    }
+                        token_state = {
+                            "input_tokens": 0,
+                            "output_tokens": 0,
+                            "total_tokens_processed_per_second": 0,
+                        }
 
-                    for line in streaming_response.iter_lines():
-                        if line:
-                            try:
-                                json_obj = json.loads(line)
-                            except json.JSONDecodeError:
-                                print("Error: ", line, flush=True)
-                                continue
+                        for line in streaming_response.iter_lines():
+                            if line:
+                                try:
+                                    json_obj = json.loads(line)
+                                except json.JSONDecodeError:
+                                    print("Error: ", line, flush=True)
+                                    continue
 
-                            if json_obj["update_type"] == "progress":
-                                if pbar is None:
-                                    spinner.stop()
-                                    postfix = "Input tokens processed: 0"
-                                    pbar = fancy_tqdm(
-                                        total=len(input_data),
-                                        desc="Progress",
-                                        style=1,
-                                        postfix=postfix,
-                                    )
-                                if json_obj["result"] > pbar.n:
-                                    pbar.update(json_obj["result"] - pbar.n)
-                                    pbar.refresh()
-                                if json_obj["result"] == len(input_data):
-                                    success = True
-                            elif json_obj["update_type"] == "tokens":
-                                # Update only the values that are present in this update
-                                # Currently, the way the progress stream endpoint is defined,
-                                # its possible to have updates come in that only have 1 or 2 fields
-                                new = {
-                                    k: v
-                                    for k, v in json_obj.get("result", {}).items()
-                                    if k in token_state and v >= token_state[k]
-                                }
-                                token_state.update(new)
+                                if json_obj["update_type"] == "progress":
+                                    if pbar is None:
+                                        spinner.stop()
+                                        postfix = "Input tokens processed: 0"
+                                        pbar = fancy_tqdm(
+                                            total=len(input_data),
+                                            desc="Progress",
+                                            style=1,
+                                            postfix=postfix,
+                                        )
+                                    if json_obj["result"] > pbar.n:
+                                        pbar.update(json_obj["result"] - pbar.n)
+                                        pbar.refresh()
+                                elif json_obj["update_type"] == "heartbeat":
+                                    # Stream setup can miss the final notification.
+                                    # Heartbeats let us detect a persisted terminal state.
+                                    observed_status = self._fetch_stream_job_status(job_id)
+                                    if observed_status is None:
+                                        continue
+                                    status = observed_status
+                                    if status in (
+                                        JobStatus.SUCCEEDED,
+                                        JobStatus.FAILED,
+                                        JobStatus.CANCELLED,
+                                    ):
+                                        success = status == JobStatus.SUCCEEDED
+                                        break
+                                elif json_obj["update_type"] == "tokens":
+                                    # Update only the values that are present in this update
+                                    # Currently, the way the progress stream endpoint is defined,
+                                    # its possible to have updates come in that only have 1 or 2 fields
+                                    new = {
+                                        k: v
+                                        for k, v in json_obj.get("result", {}).items()
+                                        if k in token_state and v >= token_state[k]
+                                    }
+                                    token_state.update(new)
 
-                                if pbar is not None:
-                                    pbar.postfix = f"Input tokens processed: {token_state['input_tokens']}, Output tokens generated: {token_state['output_tokens']}, Total tokens/s: {token_state['total_tokens_processed_per_second']}"
-                                    pbar.refresh()
+                                    if pbar is not None:
+                                        pbar.postfix = f"Input tokens processed: {token_state['input_tokens']}, Output tokens generated: {token_state['output_tokens']}, Total tokens/s: {token_state['total_tokens_processed_per_second']}"
+                                        pbar.refresh()
 
-            except KeyboardInterrupt:
-                pass
-            finally:
-                # Need to clean these up on keyboard exit otherwise it causes
-                # an error
-                if pbar is not None:
-                    pbar.close()
-                if spinner is not None:
-                    spinner.stop()
+                except KeyboardInterrupt:
+                    pass
+                else:
+                    # The stream can close without events or report all rows even
+                    # for a failed job. Only persisted status establishes success.
+                    if status not in (
+                        JobStatus.SUCCEEDED,
+                        JobStatus.FAILED,
+                        JobStatus.CANCELLED,
+                    ):
+                        # A worker can close the stream before other workers or
+                        # result finalization finish. Continue waiting for the job.
+                        try:
+                            if pbar is not None:
+                                pbar.close()
+                                pbar = None
+                            spinner.stop()
+                            spinner.text = to_colored_text("Awaiting job completion...")
+                            spinner.start()
+                            status = self._await_stream_job_completion(job_id, spinner)
+                        except KeyboardInterrupt:
+                            status = None
+                        success = status == JobStatus.SUCCEEDED
+                finally:
+                    # Need to clean these up on keyboard exit otherwise it causes
+                    # an error
+                    if pbar is not None:
+                        pbar.close()
+                    if spinner is not None:
+                        spinner.stop()
+            if status in (JobStatus.FAILED, JobStatus.CANCELLED):
+                self._report_attached_job_failure(job_id, status, spinner)
             if success:
                 spinner.text = to_colored_text(
                     "✔ Job succeeded. Obtaining results...", state="success"
@@ -1400,6 +1450,134 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
         if not job:
             return None
         return job.get("failure_reason")
+
+    def _report_attached_job_failure(self, job_id, status, spinner):
+        """Report the same terminal failure details before and after streaming."""
+        if status == JobStatus.CANCELLED:
+            message = "Job has been cancelled."
+        else:
+            try:
+                response_data = self._request_attached_job_json(
+                    f"jobs/{job_id}", ATTACHED_JOB_LOOKUP_REQUEST_TIMEOUT
+                )
+                job = response_data.get("job") if isinstance(response_data, dict) else None
+                failure_reason = job.get("failure_reason") if isinstance(job, dict) else None
+            except (requests.RequestException, ValueError, RecursionError):
+                failure_reason = None
+            detail = (
+                failure_reason.get("message")
+                if isinstance(failure_reason, dict)
+                else None
+            )
+            message = f"Failure reason: {detail or 'No failure details available.'}"
+        spinner.write(to_colored_text(message, "fail"))
+
+    def _fetch_stream_job_status(self, job_id, timeout_budget=None):
+        """Skip transient status errors without tearing down a healthy stream."""
+        request_timeout = ATTACHED_JOB_LOOKUP_REQUEST_TIMEOUT
+        if timeout_budget is not None:
+            if timeout_budget <= 0:
+                return None
+            # Give each request phase at most half the remaining polling budget.
+            request_timeout = tuple(
+                min(limit, timeout_budget / 2) for limit in request_timeout
+            )
+        try:
+            try:
+                response_data = self._request_attached_job_json(
+                    f"job-status/{job_id}", request_timeout
+                )
+            except (ValueError, RecursionError):
+                return None
+            if not isinstance(response_data, dict):
+                return None
+            statuses = response_data.get("job_status")
+            if not isinstance(statuses, dict):
+                return None
+            status = statuses.get(job_id)
+            if not isinstance(status, str):
+                return None
+            try:
+                return JobStatus(status).value
+            except ValueError:
+                return None
+        except requests.HTTPError as error:
+            if error.response is None or error.response.status_code not in (
+                408,
+                429,
+                500,
+                502,
+                503,
+                504,
+                524,
+            ):
+                raise
+        except requests.exceptions.SSLError:
+            raise
+        except (requests.ConnectionError, requests.Timeout):
+            pass
+        return None
+
+    def _request_attached_job_json(self, endpoint, request_timeout):
+        """Use the configured deployment and key for bounded auxiliary lookups."""
+        if self.api_url is None:
+            if self._api_url_error is not None:
+                raise SutroConfigurationError(self._api_url_error)
+            raise SutroConfigurationError(
+                "Sutro API URL is not configured. Set SUTRO_API_URL to your "
+                "Sutro deployment URL (for example, https://sutro.example.com)."
+            )
+        api_url = normalize_api_url(self.api_url)
+        if not isinstance(self.api_key, str) or not self.api_key.strip():
+            raise SutroConfigurationError(
+                "Sutro API key is not configured. Create a key in your Sutro "
+                "deployment's API Keys panel and set SUTRO_API_KEY."
+            )
+        url = api_url.rstrip("/") + "/" + endpoint.lstrip("/")
+        try:
+            return get_auxiliary_json(
+                url, {"Authorization": f"Key {self.api_key}"}, request_timeout
+            )
+        except requests.HTTPError as error:
+            if error.response is not None and error.response.status_code == 410:
+                response_data = getattr(error.response, "_auxiliary_json", None)
+                if (
+                    isinstance(response_data, dict)
+                    and response_data.get("detail") == DIRECT_TENSOR_FACTORY_API_ERROR
+                ):
+                    raise SutroConfigurationError(DIRECT_TENSOR_FACTORY_API_ERROR) from error
+            raise
+
+    def _await_stream_job_completion(self, job_id, spinner):
+        """Poll through stream closure until persisted completion or a deadline."""
+        deadline = time.monotonic() + ATTACHED_JOB_COMPLETION_TIMEOUT
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            status = self._fetch_stream_job_status(job_id, timeout_budget=remaining)
+            if status in (
+                JobStatus.SUCCEEDED,
+                JobStatus.FAILED,
+                JobStatus.CANCELLED,
+            ):
+                return status
+            spinner.text = to_colored_text(
+                f"Awaiting job completion for {job_id}. "
+                f"Job status is {status or 'temporarily unavailable'}"
+            )
+            remaining = deadline - time.monotonic()
+            if remaining > 0:
+                time.sleep(min(5, remaining))
+        spinner.write(
+            to_colored_text(
+                "Stopped waiting for job completion after the progress stream ended. "
+                f"Use `so.get_job_status('{job_id}')` to check the job "
+                f"or `so.await_job_completion('{job_id}')` to resume waiting.",
+                "fail",
+            )
+        )
+        return None
 
     def _fetch_job_status(self, job_id: str):
         """
@@ -2260,12 +2438,10 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
                 )
             )
 
-    def _await_job_start(self, job_id: str, timeout: Optional[int] = 7200):
-        """
-        Waits for job start to occur and then returns the results upon
-        a successful start.
-
-        """
+    def _await_job_start(
+        self, job_id: str, timeout: Optional[int] = 7200
+    ) -> Optional[str]:
+        """Return the first started or terminal status, or None when waiting ends."""
         POLL_INTERVAL = 5
 
         start_time = time.time()
@@ -2289,13 +2465,15 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
 
                 spinner.text = to_colored_text(f"Job status is {status} for {job_id}")
 
-                if status == JobStatus.RUNNING or status == JobStatus.STARTING:
-                    return True
-                if status == JobStatus.FAILED:
-                    return False
-                if status == JobStatus.CANCELLED:
-                    return False
+                if status in (
+                    JobStatus.STARTING,
+                    JobStatus.RUNNING,
+                    JobStatus.SUCCEEDED,
+                    JobStatus.FAILED,
+                    JobStatus.CANCELLED,
+                ):
+                    return status
 
                 time.sleep(POLL_INTERVAL)
 
-        return False
+        return None
