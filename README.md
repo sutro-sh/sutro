@@ -127,6 +127,39 @@ print(results)
 
 Function inputs must match the schema configured for that Function in Sutro. Replace the Function name and fields above with your published Function.
 
+### Run an S3 dataset with durable recovery
+
+The CLI signs one S3 CSV, Parquet, or JSONL object, watches the job and downloads
+normalized Parquet. On macOS or Linux, configure deployment credentials with
+`sutro login` and your usual local AWS credentials, then run:
+
+```bash
+sutro batch-run --function support-agent-judge \
+  --dataset s3://my-bucket/evaluations/input.jsonl -o results.parquet
+```
+
+Repeat the same command and output path after interruption. Keep the private
+`results.parquet.sutro.json` receipt and partial-download files: they preserve
+one submission across lost responses, Ctrl-C and interrupted downloads.
+Timeout and Ctrl-C leave remote work running. `--new-run` deliberately submits
+new work; `--overwrite` only permits replacing local output.
+
+To watch/download a known job without its receipt or source AWS credentials:
+
+```bash
+sutro jobs resume job-00000000-0000-4000-8000-000000000000 -o recovered.parquet
+```
+
+See the [CLI reference](https://docs.sutro.sh/reference/cli/index#resumable-s3-batches)
+for input constraints, owner binding, result options and recovery behavior.
+The deployment must support resumable submission.
+
+Python uses the existing `batch_run_function()` → job ID → job methods flow.
+For retry-safe S3 submission, pass a persisted `idempotency_key` and pinned
+`input_source` with a signed HTTPS URL. Reuse the same key, owner, source
+identity and request options on retry; only the signed URL may change.
+See the [Python reference](https://docs.sutro.sh/reference/python-sdk/functions#retry-safe-s3-submission).
+
 ## Run Standalone Batch Inference
 
 You can also run pre-trained LLMs directly with `infer`. This is useful for prototyping, evals, extraction, classification, generation, and one-off data transformations.

@@ -488,5 +488,59 @@ def attach(job_id, latest):
     sdk.attach(job_id)
 
 
+def _run_batch_command(**options):
+    # Import lazily so existing configuration commands need no cloud setup.
+    from sutro._batch import BatchError, run_batch
+
+    try:
+        client = get_sdk()
+        emit = lambda message: click.echo(message, err=True)
+        run_batch(client, emit=emit, **options)
+    except KeyboardInterrupt:
+        raise click.exceptions.Exit(130) from None
+    except BatchError as error:
+        raise click.ClickException(str(error)) from None
+    except Exception as error:
+        # AWS/HTTP exceptions can embed signed URLs or input data.
+        raise click.ClickException(f"Batch command failed ({type(error).__name__}). Keep the receipt and resume the same run.") from None
+
+
+@cli.command("batch-run")
+@click.option("--function", required=True, help="Published function name.")
+@click.option("--dataset", required=True, help="One s3://bucket/key CSV, Parquet, or JSONL object.")
+@click.option("--output-file-name", "-o", required=True, type=click.Path(dir_okay=False), help="Local .parquet result file.")
+@click.option("--id-column", help="Preserve this dataset column as a result identifier.")
+@click.option("--no-unpack-json", is_flag=True, help="Keep JSON outputs in inference_result instead of unpacking fields.")
+@click.option("--include-inputs", is_flag=True, help="Include rendered inputs (not a join of the original dataset).")
+@click.option("--new-run", is_flag=True, help="Explicitly submit a new run and archive any previous receipt.")
+@click.option("--overwrite", is_flag=True, help="Replace an existing output file; does not by itself submit a new job.")
+@click.option("--timeout", type=click.IntRange(min=1), default=86400, show_default=True, help="Maximum watch time in seconds; timeout never cancels remote work.")
+def batch_run(function, dataset, output_file_name, id_column, no_unpack_json,
+              include_inputs, new_run, overwrite, timeout):
+    """Run a function on S3 data and save results. Rerun the same command to resume.
+
+    Uses priority 1. A receipt beside the output protects against duplicate
+    submissions and survives Ctrl-C/network failures. AWS credentials stay local.
+    """
+    _run_batch_command(function=function, dataset=dataset, output_file_name=output_file_name,
+                       id_column=id_column, unpack_json=not no_unpack_json,
+                       include_inputs=include_inputs, new_run=new_run,
+                       overwrite=overwrite, timeout=timeout)
+
+
+@jobs.command("resume")
+@click.argument("job_id")
+@click.option("--output-file-name", "-o", required=True, type=click.Path(dir_okay=False), help="Local .parquet result file.")
+@click.option("--no-unpack-json", is_flag=True)
+@click.option("--include-inputs", is_flag=True)
+@click.option("--overwrite", is_flag=True)
+@click.option("--timeout", type=click.IntRange(min=1), default=86400, show_default=True)
+def resume(job_id, output_file_name, no_unpack_json, include_inputs, overwrite, timeout):
+    """Watch/download an existing job. Never submits inference or accesses AWS input."""
+    _run_batch_command(resume_job_id=job_id, output_file_name=output_file_name,
+                       unpack_json=not no_unpack_json, include_inputs=include_inputs,
+                       overwrite=overwrite, timeout=timeout)
+
+
 if __name__ == "__main__":
     cli()

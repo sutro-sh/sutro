@@ -778,6 +778,8 @@ class TestPresignedResultsDownload(unittest.TestCase):
         self.assertTrue(params["include_inputs"])
         self.assertFalse(params["include_cumulative_logprobs"])
         self.assertEqual(params["expires_in_seconds"], 600)
+        self.assertFalse(mock_get.call_args.kwargs["allow_redirects"])
+        self.assertEqual(mock_get.call_args.kwargs["timeout"], (5, 45))
 
     @patch("requests.get")
     def test_results_download_url_failure(self, mock_get):
@@ -917,8 +919,8 @@ class TestPresignedResultsDownload(unittest.TestCase):
 
     @patch("requests.get")
     def test_results_download_url_non_json_error_body(self, mock_get):
-        # Cloudflare 5xx pages are HTML; printing the error must not raise
-        # JSONDecodeError from inside the handler.
+        # Error bodies can contain private input/URLs and must not be printed,
+        # even when an intermediary returns HTML instead of JSON.
         mock_response = MagicMock()
         mock_response.status_code = 502
         mock_response.text = "<html>502 Bad Gateway</html>"
@@ -935,7 +937,7 @@ class TestPresignedResultsDownload(unittest.TestCase):
         self.assertIsNone(result)
         output = self.stdout_capture.getvalue()
         self.assertIn("Bad status code: 502", output)
-        self.assertIn("502 Bad Gateway", output)
+        self.assertNotIn("<html>", output)
 
     @patch("requests.get")
     def test_results_download_url_transport_error_returns_none(self, mock_get):

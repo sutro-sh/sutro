@@ -6,6 +6,7 @@ import json
 from typing import Union, List, Optional, Dict, Any, Type
 import os
 import warnings
+import uuid
 
 from tqdm import tqdm
 from yaspin import yaspin
@@ -1006,6 +1007,10 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
         langsmith_metadata: Optional[Dict[str, Any]] = None,
         langsmith_tags: Optional[List[str]] = None,
         id_column: Optional[str] = None,
+        *,
+        idempotency_key: Optional[str] = None,
+        input_source: Optional[Dict[str, Any]] = None,
+        submission_timeout: float = 300,
     ):
         """
         Run a Sutro Function on a large table, dataframe, or file using batch processing.
@@ -1040,6 +1045,14 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
                 Only used when tracing is enabled.
             id_column (str, optional): ID column to carry into results for an
                 HTTP(S) CSV or Parquet download URL. Defaults to None.
+            idempotency_key (str, optional): Persisted UUID for retry-safe S3
+                submission. Supply with input_source and a signed HTTPS URL.
+            input_source (dict, optional): Pinned S3 bucket, key, ETag, size_bytes
+                and optional version_id. Reuse the same identity and request
+                options when retrying; only the signed URL may change.
+            submission_timeout (float, optional): Seconds to wait for durable
+                input acceptance when idempotency_key is used. Defaults to 300.
+                Timeout does not cancel ingestion; retry with the same key.
 
         Returns:
             str: The ID of the batch job.
@@ -1047,6 +1060,16 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
         is_remote_input = isinstance(data, str) and data.startswith(
             ("https://", "http://")
         )
+        if (idempotency_key is None) != (input_source is None):
+            raise ValueError("idempotency_key and input_source must be supplied together.")
+        if idempotency_key is not None:
+            if not is_remote_input or not data.startswith("https://"):
+                raise ValueError("Idempotent Function batches require a signed S3 HTTPS URL.")
+            if dry_run:
+                raise ValueError("Idempotent Function batches do not support dry_run.")
+            if not 0 < submission_timeout < float("inf"):
+                raise ValueError("submission_timeout must be positive and finite.")
+            idempotency_key = str(uuid.UUID(idempotency_key))
         if stay_attached and is_remote_input:
             raise ValueError(
                 "stay_attached=True is not supported for HTTP(S) Function inputs."
@@ -1084,6 +1107,37 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
                 " pl.DataFrame, pd.DataFrame, or str where str is a filepath to a "
                 "Parquet or CSV file"
             )
+
+        if idempotency_key is not None:
+            from ._batch import BatchError, _check_capabilities, _submit_with_key
+
+            if job_name is not None and len(job_name) > JOB_NAME_CHAR_LIMIT:
+                raise ValueError(f"Job name cannot exceed {JOB_NAME_CHAR_LIMIT} characters.")
+            if description is not None and len(description) > JOB_DESCRIPTION_CHAR_LIMIT:
+                raise ValueError(f"Description cannot exceed {JOB_DESCRIPTION_CHAR_LIMIT} characters.")
+            payload = {
+                "model": name,
+                "inputs": input_data,
+                "job_priority": job_priority,
+                "truncate_rows": False,
+                "name": job_name,
+                "description": description,
+                "idempotency_key": idempotency_key,
+                "input_source": input_source,
+            }
+            if id_column is not None:
+                payload["id_column_name"] = id_column
+            deadline = time.monotonic() + submission_timeout
+            try:
+                extension = os.path.splitext(input_source["key"])[1].lower().removeprefix(".")
+                _check_capabilities(self, extension, deadline)
+                return _submit_with_key(
+                    self, idempotency_key, lambda: payload, deadline, print, submit_first=True
+                )
+            except BatchError as error:
+                print(to_colored_text(str(error), state="fail"))
+                print(f"Keep submission key {idempotency_key} to inspect or recover the original work; no cancellation was sent.")
+                return None
 
         job_id = self.infer(
             data=input_data,
@@ -1980,6 +2034,9 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
                 response = self.do_request(
                     "GET",
                     f"jobs/{job_id}/results-url",
+                    max_retries=0,
+                    allow_redirects=False,
+                    timeout=(5, 45),
                     params={
                         "format": "parquet",
                         "include_inputs": include_inputs,
@@ -1987,6 +2044,10 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
                         "expires_in_seconds": expires_in_seconds,
                     },
                 )
+                if 300 <= response.status_code < 400:
+                    response.close()
+                    spinner.write(to_colored_text("Deployment redirected the results request; no credentials were forwarded.", state="fail"))
+                    return None
                 spinner.write(
                     to_colored_text("✔ Results download URL ready", state="success")
                 )
@@ -1998,15 +2059,9 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
                     )
                 )
                 spinner.stop()
-                try:
-                    detail = e.response.json()
-                except ValueError:
-                    # Intermediaries (e.g. Cloudflare) return HTML error pages.
-                    detail = e.response.text
-                print(to_colored_text(detail, state="fail"))
                 return None
             except requests.RequestException as e:
-                spinner.write(to_colored_text(f"Request failed: {e}", state="fail"))
+                spinner.write(to_colored_text(f"Request failed ({type(e).__name__})", state="fail"))
                 return None
 
     def download_job_results(
@@ -2350,56 +2405,36 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
         Returns:
             pl.DataFrame: The results of the job in a polars DataFrame.
         """
-        POLL_INTERVAL = 5
+        from ._batch import BatchError, wait_for_job
 
-        results: pl.DataFrame | None = None
-        start_time = time.time()
         with yaspin(
             SPINNER,
             text=to_colored_text("Awaiting job completion"),
             color=BASE_OUTPUT_COLOR,
         ) as spinner:
-            # TODO: Restore a deployment-local batch UI link when Sutro
-            # deployments expose one.
-            while (time.time() - start_time) < timeout:
-                try:
-                    status = self._fetch_job_status(job_id)
-                except requests.HTTPError as e:
-                    spinner.write(
-                        to_colored_text(
-                            f"Bad status code: {e.response.status_code}", state="fail"
-                        )
-                    )
-                    spinner.stop()
-                    print(to_colored_text(e.response.json(), state="fail"))
-                    return None
-
-                spinner.text = to_colored_text(f"Job status is {status} for {job_id}")
-
-                if status == JobStatus.SUCCEEDED:
-                    spinner.stop()  # Stop this spinner as `get_job_results` has its own spinner text
-                    if obtain_results:
-                        spinner.write(
-                            to_colored_text(
-                                "Job completed! Retrieving results...", "success"
-                            )
-                        )
-                        results = self.get_job_results(
-                            job_id,
-                            output_column=output_column,
-                            **({"unwrap_reasoning": True} if unwrap_reasoning else {}),
-                        )
-                    break
-                if status == JobStatus.FAILED:
-                    spinner.write(to_colored_text("Job has failed", "fail"))
-                    return None
-                if status == JobStatus.CANCELLED:
-                    spinner.write(to_colored_text("Job has been cancelled"))
-                    return None
-
-                time.sleep(POLL_INTERVAL)
-
-        return results
+            try:
+                status = wait_for_job(
+                    lambda: self._fetch_job_status(job_id), job_id,
+                    time.monotonic() + timeout,
+                    lambda message: setattr(spinner, "text", to_colored_text(message)),
+                    poll_seconds=5,
+                )
+            except BatchError as error:
+                spinner.write(to_colored_text(str(error), state="fail"))
+                return None
+            except requests.HTTPError as error:
+                spinner.write(to_colored_text(f"Bad status code: {error.response.status_code}", state="fail"))
+                return None
+            if status != "SUCCEEDED":
+                spinner.write(to_colored_text(f"Job {status}", state="fail"))
+                return None
+            spinner.stop()
+            if obtain_results:
+                return self.get_job_results(
+                    job_id, output_column=output_column,
+                    **({"unwrap_reasoning": True} if unwrap_reasoning else {}),
+                )
+        return None
 
     def _clear_job_results_cache(self):  # only to be called by the CLI
         """
