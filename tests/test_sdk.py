@@ -1261,17 +1261,23 @@ class TestRunFunction(unittest.TestCase):
             mock_post.call_args.kwargs["timeout"], FUNCTION_RUN_REQUEST_TIMEOUT
         )
 
-    @patch("requests.post")
-    def test_run_function_waits_as_long_as_the_caller_asks(self, mock_post):
-        mock_post.return_value = self._response(
+    @patch("sutro.sdk._function_poll_response")
+    def test_run_function_waits_as_long_as_the_caller_asks(self, mock_request):
+        rejected = self._response(
             524, {"detail": "Timeout", "code": "timeout"}
         )
+        mock_request.side_effect = requests.HTTPError(response=rejected)
 
+        started = time.monotonic()
         with self.assertRaises(requests.HTTPError):
             self.so.run_function("pcr-checker", {"title": "a"}, timeout_seconds=300)
 
-        # A deployment whose deadline was raised needs a longer read timeout.
-        self.assertEqual(mock_post.call_args.kwargs["timeout"], (10, 300))
+        # Submission receives the same absolute budget later used for polling.
+        mock_request.assert_called_once()
+        self.assertEqual(mock_request.call_args.args[0], "POST")
+        deadline = mock_request.call_args.args[3]
+        self.assertGreaterEqual(deadline, started + 299)
+        self.assertLessEqual(deadline, started + 301)
 
     @patch("requests.post")
     def test_run_function_rate_limited(self, mock_post):

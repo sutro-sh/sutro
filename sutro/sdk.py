@@ -6,7 +6,13 @@ import json
 from typing import Union, List, Optional, Dict, Any, Type
 import os
 import warnings
+import math
+import re
+from urllib.parse import quote
 import uuid
+
+import anyio
+import httpx
 
 from tqdm import tqdm
 from yaspin import yaspin
@@ -25,7 +31,15 @@ from sutro.common import (
     BASE_OUTPUT_COLOR,
 )
 from sutro.interfaces import JobStatus
-from sutro._attached_requests import get_auxiliary_json
+from sutro._attached_requests import (
+    MAX_AUXILIARY_RESPONSE_BYTES,
+    _requests_response,
+    _start_attached_portal,
+    _verification_context,
+    get_auxiliary_json,
+    parse_auxiliary_json,
+)
+from sutro.assets import prepare_batch_image_assets
 from sutro.observability import (
     _is_langsmith_tracing_enabled,
     _create_batch_traces,
@@ -61,6 +75,8 @@ DOWNLOAD_REQUEST_TIMEOUT = (10, 120)
 # fails the request within its own 90 s deadline; the read timeout sits just
 # above it so a stalled connection cannot leave the caller waiting forever.
 FUNCTION_RUN_REQUEST_TIMEOUT = (10, 100)
+FUNCTION_RUN_POLL_REQUEST_TIMEOUT = 30
+FUNCTION_RUN_CANCEL_TIMEOUT = 2
 
 _JOB_RESULTS_CACHE_METADATA_KEY = b"sutro.job_results"
 
@@ -226,6 +242,93 @@ def _function_run_error(error: requests.HTTPError) -> requests.HTTPError:
     error.code = code
     error.request_id = request_id
     return error
+
+
+async def _function_poll_response(method, url, headers, deadline, payload=None):
+    """Cancel Function transport at its deadline, including trickled bodies."""
+    remaining = deadline - time.monotonic()
+    if method != "POST":
+        remaining = min(remaining, FUNCTION_RUN_POLL_REQUEST_TIMEOUT)
+    if remaining <= 0:
+        raise requests.Timeout("Function run exceeded its timeout")
+    try:
+        with anyio.fail_after(remaining):
+            timeout = httpx.Timeout(remaining)
+            async with httpx.AsyncClient(
+                timeout=timeout, verify=_verification_context()
+            ) as client:
+                async with client.stream(
+                    method,
+                    url,
+                    headers={**headers, "Accept-Encoding": "identity"},
+                    json=payload,
+                    follow_redirects=False,
+                ) as response:
+                    encoding = (
+                        response.headers.get("Content-Encoding", "identity")
+                        .strip()
+                        .lower()
+                    )
+                    if encoding not in ("", "identity"):
+                        raise ValueError(
+                            "Unexpected Function polling response encoding"
+                        )
+                    body = bytearray()
+                    async for chunk in response.aiter_raw():
+                        if len(body) + len(chunk) > MAX_AUXILIARY_RESPONSE_BYTES:
+                            raise ValueError(
+                                "Function polling response exceeds the size limit"
+                            )
+                        body.extend(chunk)
+                    result = _requests_response(response, bytes(body))
+                    if 300 <= result.status_code < 400:
+                        raise requests.HTTPError(
+                            "Function polling must not redirect", response=result
+                        )
+                    result.raise_for_status()
+                    payload = parse_auxiliary_json(body)
+                    if time.monotonic() >= deadline:
+                        raise requests.Timeout("Function run exceeded its timeout")
+                    return result, payload
+    except (TimeoutError, httpx.TimeoutException) as error:
+        raise requests.Timeout("Function run exceeded its timeout") from error
+    except httpx.TransportError as error:
+        raise requests.ConnectionError(str(error)) from error
+
+
+def _function_run_pending(name, body, request_id=None):
+    """Accept only the same deployment's exact Function run polling route."""
+    if not isinstance(body, dict):
+        raise ValueError("Invalid native Function run response")
+    received_id = body.get("request_id")
+    if not isinstance(received_id, str) or not re.fullmatch(
+        r"rt_[0-9a-f]{32}", received_id
+    ):
+        raise ValueError("Invalid native Function run request_id")
+    if request_id is not None and received_id != request_id:
+        raise ValueError("Function polling response changed request_id")
+    expected = f"/v1/functions/{quote(name, safe='')}/runs/{received_id}"
+    if body.get("poll_path") != expected:
+        raise ValueError("Invalid native Function run poll_path")
+    deadline_seconds = body.get("deadline_seconds")
+    retry_after = body.get("retry_after_seconds", 1)
+    for field, value in (
+        ("deadline_seconds", deadline_seconds),
+        ("retry_after_seconds", retry_after),
+    ):
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(value)
+            or value <= 0
+        ):
+            raise ValueError(f"Invalid native Function run {field}")
+    return (
+        received_id,
+        expected.removeprefix("/v1/"),
+        deadline_seconds,
+        min(retry_after, 5),
+    )
 
 
 class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
@@ -394,6 +497,7 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
         api_key_override: Optional[str] = None,
         base_url_override: Optional[str] = None,
         max_retries: int = 5,
+        _deadline: Optional[float] = None,
         **kwargs: Any,
     ):
         """
@@ -432,6 +536,17 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
         # Helper to make the actual HTTP request
         def _make_request():
             method_upper = method.upper()
+            if _deadline is not None:
+                with _start_attached_portal() as portal:
+                    response, _ = portal.call(
+                        _function_poll_response,
+                        method_upper,
+                        url,
+                        headers,
+                        _deadline,
+                        kwargs.get("json"),
+                    )
+                return response
             if method_upper == "GET":
                 return requests.get(url, headers=headers, **kwargs)
             elif method_upper == "POST":
@@ -540,6 +655,16 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
             )
 
         input_data, column_name = prepare_input_data(data, column)
+        input_data, image_assets = prepare_batch_image_assets(input_data)
+        for digest, data_uri in image_assets.items():
+            uploaded = self.do_request(
+                "POST", "image-assets", max_retries=0, json={"data": data_uri}
+            )
+            uploaded.raise_for_status()
+            result = uploaded.json()
+            if result["asset_id"] != digest:
+                raise ValueError("Image upload returned a different content hash")
+            image_assets[digest] = result["receipt"]
         payload = {
             "model": model,
             "inputs": input_data,
@@ -555,6 +680,8 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
         }
         if column_name is not None:
             payload["column_name"] = column_name
+        if image_assets:
+            payload["image_assets"] = image_assets
         if id_column is not None:
             payload["id_column_name"] = id_column
 
@@ -582,7 +709,19 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
                     response_data = response.json()
                 except requests.HTTPError as e:
                     response = e.response
-                    response_data = response.json()
+                    if response is None:
+                        raise
+                    try:
+                        response_data = response.json()
+                    except ValueError:
+                        # Error pages need not be JSON. Keep the HTTP status
+                        # without exposing a response body or URL-bearing
+                        # exception chain, and never replay this submission.
+                        raise requests.HTTPError(
+                            "Batch submission failed with HTTP "
+                            f"{response.status_code}.",
+                            response=response,
+                        ) from None
                 if response.status_code != 200:
                     spinner.write(
                         to_colored_text(f"Error: {response.status_code}", state="fail")
@@ -918,7 +1057,8 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
 
         The Function supplies its prompt, model, output schema, and generation
         defaults. Use :meth:`batch_run_function` instead for large tables: this
-        method makes one synchronous request per call and is rate limited.
+        method waits for one run and is rate limited. Native deployments may
+        return a queued run, which this method polls until it finishes.
 
         Automatically traces to LangSmith when ``LANGSMITH_TRACING=true`` is set.
 
@@ -933,10 +1073,13 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
                 the LangSmith trace. Only used when tracing is enabled.
             langsmith_tags (list, optional): Tags to attach to the LangSmith trace
                 for filtering. Only used when tracing is enabled.
-            timeout_seconds (float, optional): How long to wait for the answer.
-                Defaults to just above the deployment's standard 90 s request
-                deadline; set it above a deployment's own deadline when that
-                has been raised.
+            timeout_seconds (float, optional): Total deadline shared by
+                submission and polling, including streamed response bodies.
+                Without an explicit timeout, submission retains the hosted
+                connect/read timeout and queued native runs use the deployment's
+                advertised deadline for polling.
+                Aborting a known native run requests cancellation with at most
+                two additional seconds for cancellation.
             confidence_scoring (bool, optional): Whether to compute a
                 confidence score. On by default. When off, ``confidence``
                 is ``None``.
@@ -953,15 +1096,27 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
                 Function cannot be run in real time on its current model.
             requests.HTTPError: Any other API failure. ``detail``, ``code``, and
                 ``request_id`` are attached to the exception.
+            requests.Timeout: Submission or polling timed out. A known native
+                run is cancelled when possible; ``request_id`` and
+                ``cancellation_requested`` describe that attempt.
         """
         payload_input = _function_run_input(input_data)
-        timeout = (
-            FUNCTION_RUN_REQUEST_TIMEOUT
-            if timeout_seconds is None
-            else (FUNCTION_RUN_REQUEST_TIMEOUT[0], timeout_seconds)
-        )
+        if timeout_seconds is not None and (
+            not math.isfinite(timeout_seconds) or timeout_seconds <= 0
+        ):
+            raise ValueError("timeout_seconds must be finite and greater than zero")
 
         def _call(request_input: Any) -> Dict[str, Any]:
+            started = time.monotonic()
+            deadline = None if timeout_seconds is None else started + timeout_seconds
+            timeout = FUNCTION_RUN_REQUEST_TIMEOUT
+            if deadline is not None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise requests.Timeout("Function run exceeded its timeout")
+                connect = min(FUNCTION_RUN_REQUEST_TIMEOUT[0], remaining / 2)
+                timeout = (connect, remaining - connect)
+            api_url, api_key = self.api_url, self.api_key
             body: Dict[str, Any] = {"input": request_input}
             # Sent only when off, so the default still works against a
             # deployment that predates the field.
@@ -972,14 +1127,98 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
                 # run is not idempotent from the usage ledger's point of view.
                 response = self.do_request(
                     "POST",
-                    f"functions/{name}/run",
+                    f"functions/{quote(name, safe='')}/run",
                     json=body,
                     max_retries=0,
                     timeout=timeout,
+                    allow_redirects=False,
+                    api_key_override=api_key,
+                    base_url_override=api_url,
+                    _deadline=deadline,
                 )
+                if response.status_code not in (200, 202):
+                    raise requests.HTTPError(
+                        "Unexpected Function run response", response=response
+                    )
             except requests.HTTPError as e:
                 raise _function_run_error(e) from None
-            return response.json()
+            payload = response.json()
+            if response.status_code == 200:
+                if deadline is not None and time.monotonic() >= deadline:
+                    raise requests.Timeout("Function run exceeded its timeout")
+                return payload
+            request_id, endpoint, server_deadline, retry_after = _function_run_pending(
+                name, payload
+            )
+            if deadline is None:
+                deadline = started + server_deadline
+            poll_url = normalize_api_url(api_url).rstrip("/") + "/" + endpoint
+            headers = {"Authorization": f"Key {api_key}"}
+            cancellation_attempted = False
+            cancellation_requested = False
+
+            def cancel_once():
+                nonlocal cancellation_attempted, cancellation_requested
+                if cancellation_attempted:
+                    return cancellation_requested
+                cancellation_attempted = True
+                try:
+                    with _start_attached_portal() as cleanup_portal:
+                        cancelled, _ = cleanup_portal.call(
+                            _function_poll_response,
+                            "DELETE",
+                            poll_url,
+                            headers,
+                            time.monotonic() + FUNCTION_RUN_CANCEL_TIMEOUT,
+                        )
+                        cancellation_requested = cancelled.status_code in (200, 202)
+                except BaseException:
+                    # Cleanup must preserve the caller's original exception,
+                    # including an interrupt while starting the polling portal.
+                    pass
+                return cancellation_requested
+
+            try:
+                with _start_attached_portal() as portal:
+                    while True:
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            raise requests.Timeout("Function run exceeded its timeout")
+                        time.sleep(min(retry_after, remaining))
+                        response, payload = portal.call(
+                            _function_poll_response, "GET", poll_url, headers, deadline
+                        )
+                        if response.status_code == 200:
+                            if (
+                                not isinstance(payload, dict)
+                                or payload.get("request_id") != request_id
+                            ):
+                                raise ValueError("Function result changed request_id")
+                            return payload
+                        if response.status_code != 202:
+                            raise requests.HTTPError(
+                                "Unexpected Function polling response",
+                                response=response,
+                            )
+                        _, _, _, retry_after = _function_run_pending(
+                            name, payload, request_id
+                        )
+            except requests.Timeout as error:
+                cancellation_requested = cancel_once()
+                detail = f"Function run {request_id} timed out; cancellation " + (
+                    "requested" if cancellation_requested else "could not be confirmed"
+                )
+                error.args = (detail,)
+                error.detail, error.code = detail, "timeout"
+                error.request_id = request_id
+                error.cancellation_requested = cancellation_requested
+                raise
+            except requests.HTTPError as error:
+                cancel_once()
+                raise _function_run_error(error) from None
+            except BaseException:
+                cancel_once()
+                raise
 
         if _is_langsmith_tracing_enabled():
             payload = _traced_run(
@@ -1028,6 +1267,9 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
                 Accepts a list of dictionaries, a DataFrame, a path to a parquet/CSV file,
                 or an HTTP(S) download URL. Dictionary keys or table columns must match
                 the function's expected schema.
+                Image fields accept ``sutro.Image`` values or stored image names,
+                just as ``run_function`` does. Repeated inline images are
+                transferred once per batch by their content hash.
             output_column (str, optional): The column name to store the inference results.
                 Defaults to "inference_result".
             dry_run (bool, optional): If True, return cost estimates instead of running inference.

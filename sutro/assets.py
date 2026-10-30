@@ -14,6 +14,7 @@ serialized with ``json.dumps``.
 """
 
 import base64
+import hashlib
 import mimetypes
 import os
 from typing import Any, Dict, Optional, Union
@@ -38,6 +39,31 @@ _MEDIA_KIND_BY_MIME_TYPE = {
     "image/webp": "image",
     PDF_MIME_TYPE: "pdf",
 }
+
+
+def prepare_batch_image_assets(inputs):
+    """Attach explicit inline Asset values without reinterpreting customer JSON."""
+    attachments = {}
+
+    def prepare(value):
+        if isinstance(value, dict):
+            if (
+                isinstance(value, Asset)
+                and value.get("type") == "image"
+                and "base64" in value
+            ):
+                data = base64.b64decode(value["base64"], validate=True)
+                digest = hashlib.sha256(data).hexdigest()
+                attachments[digest] = (
+                    f"data:{value['mime_type']};base64,{value['base64']}"
+                )
+                return {"asset_id": digest}
+            return {key: prepare(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [prepare(item) for item in value]
+        return value
+
+    return prepare(inputs), attachments
 
 
 def _normalize_mime_type(mime_type: str) -> str:
