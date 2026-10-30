@@ -51,12 +51,12 @@ With `uv`:
 uv pip install sutro
 ```
 
-Native Functions and image Batch inputs require SDK **0.1.68 or later**
+Native Functions and image Batch inputs require SDK **0.1.69 or later**
 for automatic cold-start polling and image uploads. After that version is
 published, upgrade an existing installation with:
 
 ```bash
-pip install --upgrade "sutro>=0.1.68"
+pip install --upgrade "sutro>=0.1.69"
 ```
 
 ### Authenticate

@@ -1219,7 +1219,7 @@ wheels = [
 
 [[package]]
 name = "sutro"
-version = "0.1.68"
+version = "0.1.69"
 source = { editable = "." }
 dependencies = [
     { name = "anyio" },
