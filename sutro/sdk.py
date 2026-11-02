@@ -31,6 +31,7 @@ from sutro.common import (
     BASE_OUTPUT_COLOR,
 )
 from sutro.interfaces import JobStatus
+from sutro._client_headers import sdk_request_headers
 from sutro._attached_requests import (
     MAX_AUXILIARY_RESPONSE_BYTES,
     _requests_response,
@@ -527,11 +528,9 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
                 "Sutro API key is not configured. Create a key in your Sutro "
                 "deployment's API Keys panel and set SUTRO_API_KEY."
             )
-        headers = {"Authorization": f"Key {key}"}
-
-        # Merge with any headers passed in kwargs
-        if "headers" in kwargs:
-            headers.update(kwargs.pop("headers"))
+        headers = sdk_request_headers(
+            {"Authorization": f"Key {key}", **kwargs.pop("headers", {})}
+        )
 
         # Helper to make the actual HTTP request
         def _make_request():
@@ -1153,7 +1152,7 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
             if deadline is None:
                 deadline = started + server_deadline
             poll_url = normalize_api_url(api_url).rstrip("/") + "/" + endpoint
-            headers = {"Authorization": f"Key {api_key}"}
+            headers = sdk_request_headers({"Authorization": f"Key {api_key}"})
             cancellation_attempted = False
             cancellation_requested = False
 
@@ -1832,7 +1831,9 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
         url = api_url.rstrip("/") + "/" + endpoint.lstrip("/")
         try:
             return get_auxiliary_json(
-                url, {"Authorization": f"Key {self.api_key}"}, request_timeout
+                url,
+                sdk_request_headers({"Authorization": f"Key {self.api_key}"}),
+                request_timeout,
             )
         except requests.HTTPError as error:
             if error.response is not None and error.response.status_code == 410:

@@ -3,6 +3,7 @@
 import asyncio
 import contextlib
 import json
+from importlib.metadata import version
 import os
 import ssl
 import subprocess
@@ -441,6 +442,8 @@ print('pending bootstrap self-cleaned; no download started')
         self.assertEqual(str(seen[0].url), "https://deployment.example.test/v1/job-status/job-123")
         self.assertEqual(seen[0].headers["Authorization"], "Key private-key")
         self.assertEqual(seen[0].headers["Accept-Encoding"], "identity")
+        self.assertEqual(seen[0].headers["X-Sutro-SDK-Version"], version("sutro"))
+        self.assertEqual(seen[0].headers["User-Agent"], f"sutro-python/{version('sutro')}")
 
     def test_unexpected_compression_is_rejected_before_decoding(self):
         stream = RecordingStream([b"compressed data"])

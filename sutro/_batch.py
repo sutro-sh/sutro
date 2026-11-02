@@ -6,7 +6,6 @@ URLs. They are saved before submission; only an explicit new run gets a new key.
 
 from contextlib import contextmanager
 import ctypes
-import importlib.metadata
 import hashlib
 import json
 import math
@@ -26,16 +25,13 @@ import requests
 import sys
 
 from sutro._batch_output import ResultShapeError, normalize_results
+from sutro._client_headers import SDK_VERSION
 
 
 JOB_ID = re.compile(r"job-[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}")
 FORMATS = {"csv", "parquet", "jsonl"}
 POLL_SECONDS = 15
-try:
-    _VERSION = importlib.metadata.version("sutro")
-except importlib.metadata.PackageNotFoundError:
-    _VERSION = "unknown"
-USER_AGENT = f"SutroBatch/{_VERSION}"
+USER_AGENT = f"SutroBatch/{SDK_VERSION}"
 
 
 class BatchError(Exception):

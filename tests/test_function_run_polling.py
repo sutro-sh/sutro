@@ -1,6 +1,7 @@
 """Native Function polling retains one submission and cancels owned transport."""
 
 import json
+from importlib.metadata import version
 from contextlib import contextmanager
 import subprocess
 import sys
@@ -91,6 +92,8 @@ def test_async_success_polls_one_owned_run_and_preserves_result(client, transpor
     def handle(request):
         calls.append(request)
         assert request.headers["Authorization"] == "Key private-test-key"
+        assert request.headers["X-Sutro-SDK-Version"] == version("sutro")
+        assert request.headers["User-Agent"] == f"sutro-python/{version('sutro')}"
         assert str(request.url) == "https://deployment.example.test" + POLL_PATH
         if len(calls) == 1:
             return httpx.Response(202, json=pending(state="running"))
@@ -177,6 +180,7 @@ def test_timeout_closes_trickling_poll_and_requests_cancellation(
 
     def handle(request):
         calls.append(request.method)
+        assert request.headers["X-Sutro-SDK-Version"] == version("sutro")
         if request.method == "POST":
             return httpx.Response(202, json=pending(deadline_seconds=0.2))
         if request.method == "DELETE":

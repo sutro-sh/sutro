@@ -75,6 +75,14 @@ export SUTRO_API_KEY="sk_..."
 appended. The SDK normalizes either form to `/v1` and sends all requests through
 that deployment.
 
+Sutro API requests include `X-Sutro-SDK-Version` with the installed package
+version and default to `User-Agent: sutro-python/<version>`. The batch CLI keeps
+its `SutroBatch/<version>` User-Agent. Retries, polling, cancellation and progress
+streams include the version header too, and Harmonize forwards it to the batch
+backend as client metadata. Source checkouts without installed package metadata
+report `unknown`. Direct requests to signed object-storage URLs do not receive
+these SDK headers.
+
 You can instead persist both values interactively for future SDK and CLI calls:
 
 ```bash
