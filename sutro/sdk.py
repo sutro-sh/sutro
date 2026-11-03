@@ -662,7 +662,7 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
             uploaded.raise_for_status()
             result = uploaded.json()
             if result["asset_id"] != digest:
-                raise ValueError("Image upload returned a different content hash")
+                raise ValueError("Asset upload returned a different content hash")
             image_assets[digest] = result["receipt"]
         payload = {
             "model": model,
@@ -1266,8 +1266,9 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
                 Accepts a list of dictionaries, a DataFrame, a path to a parquet/CSV file,
                 or an HTTP(S) download URL. Dictionary keys or table columns must match
                 the function's expected schema.
-                Image fields accept ``sutro.Image`` values or stored image names,
-                just as ``run_function`` does. Repeated inline images are
+                Image and PDF fields accept ``sutro.Asset`` values or stored asset
+                names, just as ``run_function`` does. ``sutro.Image`` is available
+                for image-only fields. Repeated inline assets are
                 transferred once per batch by their content hash.
             output_column (str, optional): The column name to store the inference results.
                 Defaults to "inference_result".

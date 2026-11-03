@@ -1382,12 +1382,24 @@ class TestRunFunction(unittest.TestCase):
             {
                 "note": "check page 2",
                 "scan": Asset.from_url("https://files.example.test/a.pdf"),
+                "inline_scan": Asset.from_bytes(
+                    b"%PDF-1.4", "application/pdf", filename="scan.pdf"
+                ),
                 "photo": Image.from_bytes(b"\x89PNG\r\n\x1a\n", "image/png"),
             },
         )
 
         sent = mock_post.call_args.kwargs["json"]["input"]
         self.assertEqual(sent["scan"], {"url": "https://files.example.test/a.pdf"})
+        self.assertEqual(
+            sent["inline_scan"],
+            {
+                "type": "pdf",
+                "base64": "JVBERi0xLjQ=",
+                "filename": "scan.pdf",
+                "mime_type": "application/pdf",
+            },
+        )
         self.assertEqual(
             sent["photo"],
             {

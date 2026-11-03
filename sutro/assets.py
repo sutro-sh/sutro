@@ -42,14 +42,14 @@ _MEDIA_KIND_BY_MIME_TYPE = {
 
 
 def prepare_batch_image_assets(inputs):
-    """Attach explicit inline Asset values without reinterpreting customer JSON."""
+    """Attach explicit inline image/PDF Assets without reinterpreting customer JSON."""
     attachments = {}
 
     def prepare(value):
         if isinstance(value, dict):
             if (
                 isinstance(value, Asset)
-                and value.get("type") == "image"
+                and value.get("type") in {"image", "pdf"}
                 and "base64" in value
             ):
                 data = base64.b64decode(value["base64"], validate=True)
