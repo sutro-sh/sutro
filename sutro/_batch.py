@@ -57,6 +57,11 @@ class ApiError(BatchError):
             "After correcting a terminal failure, use a new submission key "
             "(--new-run in the CLI).",
         }
+        if status == 403 and code == "batch_inference_disabled":
+            hints[403] = (
+                "New batch inference is disabled for this deployment. "
+                "Existing jobs and results remain available."
+            )
         code_text = f" [{code}]" if isinstance(code, str) and code else ""
         super().__init__(
             f"Deployment returned HTTP {status}{code_text}. "
@@ -82,19 +87,23 @@ def _json_request(client, method, endpoint, deadline, body=None, *, params=None)
             if 300 <= response.status_code < 400:
                 raise BatchError("The deployment redirected the API request; no credentials were forwarded.")
             if response.status_code not in (200, 202):
-                raise ApiError(response.status_code)
+                raise ApiError(
+                    response.status_code,
+                    code=getattr(response, "headers", {}).get("X-Sutro-Error-Code"),
+                )
             data = response.json()
             if not isinstance(data, dict):
                 raise BatchError("The deployment returned an invalid API response.")
             return response.status_code, data
     except requests.HTTPError as error:
+        code = getattr(error.response, "headers", {}).get("X-Sutro-Error-Code")
         try:
             details = error.response.json()
             retryable = isinstance(details, dict) and details.get("retryable") is True
-            code = details.get("code") if isinstance(details, dict) else None
+            if code is None:
+                code = details.get("code") if isinstance(details, dict) else None
         except ValueError:
             retryable = False
-            code = None
         raise ApiError(
             error.response.status_code, retryable=retryable, code=code
         ) from None

@@ -8,6 +8,8 @@ import pytest
 import requests
 
 from sutro.sdk import Sutro
+from sutro import _batch
+import time
 
 
 SECRET_BODY = "private-response-body-sentinel"
@@ -129,4 +131,56 @@ def test_http_error_without_response_is_not_replaced_by_an_attribute_error(
         submit(client)
 
     assert raised.value is error
+    post.assert_called_once()
+
+
+@pytest.mark.parametrize("priority", [0, 1])
+def test_disabled_batch_policy_is_explained_without_retry_or_cancellation(
+    client, monkeypatch, capsys, priority
+):
+    message = (
+        "New batch inference is disabled for this deployment. "
+        "Existing jobs and results remain available."
+    )
+    failed = response(403, json.dumps({"detail": message}).encode(), "application/json")
+    failed.headers["X-Sutro-Error-Code"] = "batch_inference_disabled"
+    post = Mock(return_value=failed)
+    monkeypatch.setattr("requests.post", post)
+    assert (
+        client.batch_run_function(
+            "function",
+            [{"question": "row"}],
+            stay_attached=False,
+            job_priority=priority,
+        )
+        is None
+    )
+    assert message in capsys.readouterr().out
+    post.assert_called_once()
+
+
+@pytest.mark.parametrize("priority", [0, 1])
+def test_resumable_batch_explains_policy_and_preserves_submission_key(
+    client, monkeypatch, priority
+):
+    failed = response(403, b'{"detail":"Batch unavailable"}', "application/json")
+    failed.headers["X-Sutro-Error-Code"] = "batch_inference_disabled"
+    post = Mock(return_value=failed)
+    monkeypatch.setattr("requests.post", post)
+    key = "00000000-0000-4000-8000-000000000002"
+    body = {"idempotency_key": key, "job_priority": priority}
+    with pytest.raises(
+        _batch.ApiError, match="New batch inference is disabled"
+    ) as error:
+        _batch._submit_with_key(
+            client,
+            key,
+            lambda: body,
+            time.monotonic() + 60,
+            lambda message: None,
+            submit_first=True,
+        )
+    assert error.value.code == "batch_inference_disabled"
+    assert "Check deployment access permissions" not in str(error.value)
+    assert body["idempotency_key"] == key
     post.assert_called_once()
