@@ -759,7 +759,7 @@ class TestPresignedResultsDownload(unittest.TestCase):
         response.__enter__.return_value = response
         return response
 
-    @patch("requests.get")
+    @patch("sutro.sdk.get_results_response")
     def test_results_download_url_success(self, mock_get):
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -772,16 +772,15 @@ class TestPresignedResultsDownload(unittest.TestCase):
 
         self.assertEqual(result, self.payload)
         url = mock_get.call_args.args[0]
-        params = mock_get.call_args.kwargs["params"]
+        params = mock_get.call_args.args[2]
         self.assertIn("jobs/test-job/results-url", url)
         self.assertEqual(params["format"], "parquet")
         self.assertTrue(params["include_inputs"])
         self.assertFalse(params["include_cumulative_logprobs"])
         self.assertEqual(params["expires_in_seconds"], 600)
-        self.assertFalse(mock_get.call_args.kwargs["allow_redirects"])
-        self.assertEqual(mock_get.call_args.kwargs["timeout"], (5, 45))
+        self.assertEqual(mock_get.call_args.args[3], 180)
 
-    @patch("requests.get")
+    @patch("sutro.sdk.get_results_response")
     def test_results_download_url_failure(self, mock_get):
         mock_response = MagicMock()
         mock_response.status_code = 404
@@ -917,7 +916,7 @@ class TestPresignedResultsDownload(unittest.TestCase):
         with open(expected_path, "rb") as f:
             self.assertEqual(f.read(), b"0123456789")
 
-    @patch("requests.get")
+    @patch("sutro.sdk.get_results_response")
     def test_results_download_url_non_json_error_body(self, mock_get):
         # Error bodies can contain private input/URLs and must not be printed,
         # even when an intermediary returns HTML instead of JSON.
@@ -939,7 +938,7 @@ class TestPresignedResultsDownload(unittest.TestCase):
         self.assertIn("Bad status code: 502", output)
         self.assertNotIn("<html>", output)
 
-    @patch("requests.get")
+    @patch("sutro.sdk.get_results_response")
     def test_results_download_url_transport_error_returns_none(self, mock_get):
         mock_get.side_effect = requests.ConnectionError("connection reset by peer")
 
@@ -947,7 +946,7 @@ class TestPresignedResultsDownload(unittest.TestCase):
 
         self.assertIsNone(result)
         output = self.stdout_capture.getvalue()
-        self.assertIn("Request failed", output)
+        self.assertIn("preparation failed", output)
 
     @patch("requests.get")
     @patch("requests.head")

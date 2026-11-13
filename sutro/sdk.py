@@ -38,6 +38,7 @@ from sutro._attached_requests import (
     _start_attached_portal,
     _verification_context,
     get_auxiliary_json,
+    get_results_response,
     parse_auxiliary_json,
 )
 from sutro.assets import prepare_batch_image_assets
@@ -71,6 +72,7 @@ ATTACHED_JOB_LOOKUP_REQUEST_TIMEOUT = (10, 30)
 # (connect, read) timeouts for direct requests to presigned URLs. The read
 # timeout bounds inactivity between streamed chunks, not the whole download.
 DOWNLOAD_REQUEST_TIMEOUT = (10, 120)
+RESULTS_PREPARATION_TIMEOUT_SECONDS = 180.0
 
 # (connect, read) timeouts for a real-time Function run. The server answers or
 # fails the request within its own 90 s deadline; the read timeout sits just
@@ -499,6 +501,7 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
         base_url_override: Optional[str] = None,
         max_retries: int = 5,
         _deadline: Optional[float] = None,
+        _results_preparation_timeout: Optional[float] = None,
         **kwargs: Any,
     ):
         """
@@ -535,6 +538,12 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
         # Helper to make the actual HTTP request
         def _make_request():
             method_upper = method.upper()
+            if _results_preparation_timeout is not None:
+                if method_upper != "GET":
+                    raise ValueError("Result preparation requires GET")
+                return get_results_response(
+                    url, headers, kwargs.get("params"), _results_preparation_timeout
+                )
             if _deadline is not None:
                 with _start_attached_portal() as portal:
                     response, _ = portal.call(
@@ -2248,6 +2257,7 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
         include_inputs: bool = False,
         include_cumulative_logprobs: bool = False,
         expires_in_seconds: int = 3600,
+        preparation_timeout: float = RESULTS_PREPARATION_TIMEOUT_SECONDS,
     ) -> Optional[dict]:
         """
         Get presigned download URLs for a job's results artifact.
@@ -2263,12 +2273,22 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
             include_inputs (bool, optional): Whether to include the inputs in the results. Defaults to False.
             include_cumulative_logprobs (bool, optional): Whether to include the cumulative logprobs in the results. Defaults to False.
             expires_in_seconds (int, optional): How long the presigned URLs remain valid, up to 7 days. Defaults to 3600 (1 hour).
+            preparation_timeout (float, optional): Total URL-preparation budget in seconds,
+                including connection and JSON response. Must be finite, positive and at most
+                180 seconds. Defaults to 180. This is separate from file-body transfer time.
 
         Returns:
             Optional[dict]: Payload with `artifact` metadata (`filename`, `size_bytes`, ...) and presigned
             `urls` (`get` for downloading, `head` for metadata). The `get` URL supports HTTP Range
             requests. Returns None if the request fails.
         """
+        if (
+            isinstance(preparation_timeout, bool)
+            or not isinstance(preparation_timeout, (int, float))
+            or not math.isfinite(preparation_timeout)
+            or not 0 < preparation_timeout <= RESULTS_PREPARATION_TIMEOUT_SECONDS
+        ):
+            raise ValueError("preparation_timeout must be finite and in (0, 180] seconds")
         with yaspin(
             SPINNER,
             text=to_colored_text(f"Preparing results download for job: {job_id}"),
@@ -2280,7 +2300,7 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
                     f"jobs/{job_id}/results-url",
                     max_retries=0,
                     allow_redirects=False,
-                    timeout=(5, 45),
+                    _results_preparation_timeout=preparation_timeout,
                     params={
                         "format": "parquet",
                         "include_inputs": include_inputs,
@@ -2299,13 +2319,20 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
             except requests.HTTPError as e:
                 spinner.write(
                     to_colored_text(
-                        f"Bad status code: {e.response.status_code}", state="fail"
+                        f"Bad status code: {e.response.status_code}; no request was retried. "
+                        "The existing job and partial download are preserved.", state="fail"
                     )
                 )
                 spinner.stop()
                 return None
             except requests.RequestException as e:
-                spinner.write(to_colored_text(f"Request failed ({type(e).__name__})", state="fail"))
+                spinner.write(to_colored_text(
+                    f"Results URL preparation failed ({type(e).__name__}); no request was retried. "
+                    "The server may still finish preparing this job's cached artifact. "
+                    "The existing job and any partial download are preserved.", state="fail"))
+                return None
+            except (ValueError, RecursionError):
+                spinner.write(to_colored_text("Invalid results URL response; no download started.", state="fail"))
                 return None
 
     def download_job_results(
@@ -2316,6 +2343,7 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
         include_cumulative_logprobs: bool = False,
         resume: bool = True,
         expires_in_seconds: int = 3600,
+        preparation_timeout: float = RESULTS_PREPARATION_TIMEOUT_SECONDS,
     ) -> Optional[str]:
         """
         Download a job's results as a Parquet file on local disk.
@@ -2337,6 +2365,9 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
             include_cumulative_logprobs (bool, optional): Whether to include the cumulative logprobs in the results. Defaults to False.
             resume (bool, optional): Whether to resume a partial download if one exists. Defaults to True.
             expires_in_seconds (int, optional): How long the presigned URLs remain valid, up to 7 days. Defaults to 3600 (1 hour).
+            preparation_timeout (float, optional): Total budget for preparing the URL,
+                in (0, 180] seconds. Defaults to 180; file-body transfer uses a separate
+                120-second inactivity timeout and retains resumable partial files.
 
         Returns:
             Optional[str]: The local path of the downloaded Parquet file, ready for
@@ -2347,6 +2378,7 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
             include_inputs=include_inputs,
             include_cumulative_logprobs=include_cumulative_logprobs,
             expires_in_seconds=expires_in_seconds,
+            preparation_timeout=preparation_timeout,
         )
         if payload is None:
             return None

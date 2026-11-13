@@ -1,4 +1,4 @@
-"""Cancellable HTTP lookups used only by attached inference."""
+"""Cancellable, bounded JSON lookups for attached inference and result URLs."""
 
 import json
 import os
@@ -110,6 +110,7 @@ def _requests_response(response, body=b""):
     result.headers.update(response.headers)
     result.url = str(response.url)
     result._content = body
+    result._content_consumed = True
     return result
 
 
@@ -118,7 +119,10 @@ def _check_deadline(deadline):
         raise TimeoutError("Auxiliary lookup deadline exceeded")
 
 
-async def _download_json(url, headers, request_timeout, deadline):
+async def _download_json(
+    url, headers, request_timeout, deadline, *, params=None,
+    allow_redirects=True, return_response=False,
+):
     remaining = deadline - time.monotonic()
     if remaining <= 0:
         raise TimeoutError("Auxiliary lookup deadline exceeded")
@@ -131,7 +135,7 @@ async def _download_json(url, headers, request_timeout, deadline):
         )
         async with httpx.AsyncClient(timeout=timeout, verify=_verification_context()) as client:
             headers = {**headers, "Accept-Encoding": "identity"}
-            request = client.build_request("GET", url, headers=headers)
+            request = client.build_request("GET", url, headers=headers, params=params)
             for _ in range(31):
                 response = await client.send(request, stream=True, follow_redirects=False)
                 try:
@@ -146,11 +150,13 @@ async def _download_json(url, headers, request_timeout, deadline):
                         if len(body) + len(chunk) > MAX_AUXILIARY_RESPONSE_BYTES:
                             raise ValueError("Auxiliary response exceeds the size limit")
                         body.extend(chunk)
-                    if response.next_request is not None:
+                    if allow_redirects and response.next_request is not None:
                         request = response.next_request
                         continue
                     bounded_response = _requests_response(response, bytes(body))
                     _check_deadline(deadline)
+                    if return_response and 300 <= response.status_code < 400:
+                        return bounded_response
                     if response.status_code == 410:
                         try:
                             diagnostic = parse_auxiliary_json(body)
@@ -161,13 +167,13 @@ async def _download_json(url, headers, request_timeout, deadline):
                     bounded_response.raise_for_status()
                     result = parse_auxiliary_json(body)
                     _check_deadline(deadline)
-                    return result
+                    return bounded_response if return_response else result
                 finally:
                     await response.aclose()
             raise requests.TooManyRedirects("Exceeded 30 auxiliary redirects")
 
 
-def get_auxiliary_json(url, headers, request_timeout):
+def _bounded_json_get(url, headers, request_timeout, deadline, **options):
     """Cancel network I/O at a total deadline and clean up the worker portal.
 
     The response is capped before synchronous JSON parsing. Parsing is bounded
@@ -176,12 +182,17 @@ def get_auxiliary_json(url, headers, request_timeout):
     work and scheduler delays are likewise outside cooperative cancellation.
     Generic SDK requests do not use this transport.
     """
-    deadline = time.monotonic() + sum(request_timeout)
     try:
         # A separate, joined loop also supports callers already in an event loop.
         # On KeyboardInterrupt the portal cancels its task before joining.
         with _start_attached_portal() as portal:
-            return portal.call(_download_json, url, headers, request_timeout, deadline)
+            if not options:
+                return portal.call(_download_json, url, headers, request_timeout, deadline)
+            async def download():
+                return await _download_json(
+                    url, headers, request_timeout, deadline, **options
+                )
+            return portal.call(download)
     except (TimeoutError, httpx.TimeoutException) as error:
         raise requests.Timeout("Auxiliary lookup deadline exceeded") from error
     except httpx.UnsupportedProtocol as error:
@@ -195,3 +206,23 @@ def get_auxiliary_json(url, headers, request_timeout):
                 raise requests.exceptions.SSLError(str(error)) from error
             cause = cause.__cause__
         raise requests.ConnectionError(str(error)) from error
+
+
+def get_auxiliary_json(url, headers, request_timeout):
+    return _bounded_json_get(
+        url, headers, request_timeout, time.monotonic() + sum(request_timeout)
+    )
+
+
+def get_results_response(url, headers, params, timeout_seconds):
+    """One credential-bound GET, with a total preparation deadline and no redirects.
+
+    The deadline covers connect, headers and the bounded JSON body, including a
+    trickling response. It never retries an expensive export. Signed file-body
+    transfers use their separate inactivity/resume contract.
+    """
+    return _bounded_json_get(
+        url, headers, (min(5, timeout_seconds), timeout_seconds),
+        time.monotonic() + timeout_seconds,
+        params=params, allow_redirects=False, return_response=True,
+    )

@@ -222,6 +222,43 @@ print(results)
 
 ![Prototyping Job Result](./assets/terminal-4.png)
 
+## Download large Batch results
+
+SDK **0.2.0** gives result URL preparation a separate total deadline of
+180 seconds. Preparing a cold Parquet download can take more than 45 seconds
+when it includes a large input dataset. Upgrade older clients for this case:
+
+```bash
+pip install --upgrade "sutro>=0.2.0"
+```
+
+```python
+path = so.download_job_results(
+    job_id,
+    output_path="results.parquet",
+    include_inputs=True,
+    preparation_timeout=180,
+)
+```
+
+`preparation_timeout` may be lowered to any positive finite number up to 180
+seconds. It includes the connection, response headers and bounded URL metadata
+body. A timeout, HTTP error or interruption does not automatically repeat the
+export request or create a new Batch job. The server may finish its cached
+artifact after a client disconnects; use the same job and options when checking
+again. An intermediary may return an earlier HTTP error.
+
+The signed file transfer starts after the URL is ready. Its separate connection
+and read-inactivity limits remain 10 and 120 seconds; this is not a total limit
+on the file's download duration. Interrupted transfers retain their `.part`
+file and validate its ETag before a later Range resume. API credentials are
+never added to requests to signed file URLs.
+
+Deployments should use the paired service release for the bounded preparation
+and export-concurrency fixes. Existing API servers retain the same results URL
+protocol. SDK 0.1.71 and earlier keep their 45-second URL wait, so large cold
+downloads with inputs can still time out until those clients upgrade.
+
 ## Move to Production
 
 Sutro supports two Batch priorities today:
