@@ -10,7 +10,7 @@ install:
 	$(MAKE) build
 	uv pip install $$(ls -t dist/*.whl | head -n 1) --force-reinstall
 
-# Called last by the root release target; also usable to retry just PyPI.
+# Called last by the root release target; reconcile uncertain PyPI results first.
 publish:
 	@set -eu; \
 	  worktree_status="$$(git status --porcelain)"; \

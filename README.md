@@ -414,6 +414,14 @@ For security, deployment, or procurement questions, contact [team@sutro.sh](mail
 
 We welcome contributions and feedback. Please reach out at [team@sutro.sh](mailto:team@sutro.sh) before larger changes so we can coordinate.
 
+Maintainers normally publish from the accepted, clean release checkout with
+`make -C sutro publish` and configured uv credentials. If those credentials are
+unavailable, the SDK-only manual trusted publisher is a fallback. Its default
+`verify-only` mode checks the existing protected PyPI identity without uploading.
+Publication requires exact reviewed distribution hashes and a matching service
+acceptance receipt after the service rollout. See
+[SDK publisher recovery](https://github.com/sutro-sh/foundation/blob/main/ROLLOUT.md#sdk-only-trusted-publisher).
+
 ## License
 
 Apache-2.0

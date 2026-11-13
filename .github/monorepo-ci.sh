@@ -16,6 +16,7 @@ python3 -m venv "$test_env/venv"
   tests/test_sdk.py::TestPresignedResultsDownload \
   tests/test_function_run_polling.py tests/test_batch_image_assets.py \
   tests/test_client_headers.py tests/test_results_preparation.py \
+  tests/test_trusted_publisher.py \
   tests/test_attached_requests.py::TestAttachedRequests::test_authorization_and_deployment_url_are_preserved \
   tests/test_batch_submission_errors.py \
   tests/test_sdk.py::TestRunFunction tests/test_sdk.py::TestAssetHelpers
