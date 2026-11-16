@@ -49,9 +49,6 @@ from sutro.observability import (
     _complete_batch_traces,
     _traced_run,
 )
-from sutro.templates.classification import ClassificationTemplates
-from sutro.templates.embed import EmbeddingTemplates
-from sutro.templates.evals import EvalTemplates
 from sutro.validation import (
     DIRECT_TENSOR_FACTORY_API_ERROR,
     check_version,
@@ -334,7 +331,7 @@ def _function_run_pending(name, body, request_id=None):
     )
 
 
-class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
+class Sutro:
     def __init__(
         self,
         api_key: str = None,
@@ -980,7 +977,7 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
     def infer(
         self,
         data: Union[List, pd.DataFrame, pl.DataFrame, str],
-        model: ModelOptions = "gpt-oss-20b",
+        model: ModelOptions = "gemma-4-26b-a4b-it",
         name: Optional[str] = None,
         description: Optional[str] = None,
         column: Union[str, List[str]] = None,
@@ -1003,7 +1000,7 @@ class Sutro(EmbeddingTemplates, ClassificationTemplates, EvalTemplates):
 
         Args:
             data (Union[List, pd.DataFrame, pl.DataFrame, str]): The data to run inference on.
-            model (ModelOptions, optional): The model to use for inference. Defaults to "gemma-3-12b-it".
+            model (ModelOptions, optional): The model to use for inference. Defaults to "gemma-4-26b-a4b-it".
             name (str, optional): A job name for experiment/metadata tracking purposes. Defaults to None.
             description (str, optional): A job description for experiment/metadata tracking purposes. Defaults to None.
             column (Union[str, List[str]], optional): The column name to use for inference. Required if data is a DataFrame or file path. If a list is supplied, it will concatenate the columns of the list into a single column, accepting separator strings.

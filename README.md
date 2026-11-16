@@ -205,7 +205,7 @@ class ReviewSentiment(BaseModel):
 job_id = so.infer(
     data=df,
     column="review",
-    model="gpt-oss-20b",
+    model="gemma-4-26b-a4b-it",
     system_prompt=(
         "Classify each product review as positive, neutral, or negative. "
         "Return a short rationale."
@@ -280,7 +280,7 @@ df = pl.read_parquet(
 estimate_job_id = so.infer(
     data=df,
     column="review_text",
-    model="gpt-oss-20b",
+    model="gemma-4-26b-a4b-it",
     system_prompt="Summarize the review in one sentence.",
     job_priority=1,
     dry_run=True,
@@ -290,7 +290,7 @@ print(estimate_job_id)
 job_id = so.infer(
     data=df,
     column="review_text",
-    model="gpt-oss-20b",
+    model="gemma-4-26b-a4b-it",
     system_prompt="Summarize the review in one sentence.",
     job_priority=1,
     name="review-summary-prod",
@@ -344,8 +344,8 @@ import sutro as so
 
 job_ids = so.infer_per_model(
     data=["Explain quantum computing in simple terms."],
-    models=["gpt-oss-20b", "gpt-oss-120b"],
-    names=["gpt-oss-20b-test", "gpt-oss-120b-test"],
+    models=["gemma-4-26b-a4b-it", "gemma-4-31b-it"],
+    names=["gemma-4-26b-test", "gemma-4-31b-test"],
     system_prompt="Give a concise, accurate answer.",
 )
 ```
@@ -356,10 +356,12 @@ job_ids = so.infer_per_model(
 import sutro as so
 
 
-results = so.embed(
+job_id = so.infer(
     data=["battery life", "camera quality", "price sensitivity"],
     model="qwen-3-embedding-0.6b",
+    stay_attached=False,
 )
+results = so.await_job_completion(job_id)
 ```
 
 ### Job management

@@ -14,7 +14,6 @@ EmbeddingModelOptions = (
     Literal[
         "embeddinggemma-300m",
         "qwen-3-embedding-0.6b",
-        "qwen-3-embedding-4b",
         "qwen-3-embedding-8b",
     ]
     | str  # Accept a string here for those running a Function
@@ -25,28 +24,18 @@ EmbeddingModelOptions = (
 ModelOptions = (
     EmbeddingModelOptions
     | Literal[
-        "qwen-3.5-2b",
-        "qwen-3.5-2b-thinking",
         "qwen-3.5-27b",
         "qwen-3.5-27b-thinking",
         "qwen-3.5-35b-a3b",
         "qwen-3.5-35b-a3b-thinking",
         "qwen-3.5-122b-a10b",
         "qwen-3.5-122b-a10b-thinking",
-        "gpt-oss-20b",
-        "gpt-oss-120b",
-        "gpt-oss-20b-no-thinking",
-        "gpt-oss-120b-no-thinking",
-        "nemotron-3-super-120b-a12b",
-        "nemotron-3-super-120b-a12b-thinking",
-        "nemotron-3-nano-30b-a3b",
-        "nemotron-3-nano-30b-a3b-thinking",
         "gemma-4-31b-it",
         "gemma-4-31b-it-thinking",
         "gemma-4-26b-a4b-it",
         "gemma-4-26b-a4b-it-thinking",
     ]
-    | str  # Accept a string here for those using running a Function
+    | str  # Accept a string here for those running a Function
 )
 
 
