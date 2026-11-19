@@ -155,8 +155,8 @@ class FunctionRunResult(dict):
 
     @property
     def confidence(self) -> Optional[float]:
-        """The confidence score for this answer, between 0 and 1. ``None``
-        when the request was made with ``confidence_scoring=False``."""
+        """Deprecated and always ``1.0``: deployments no longer compute a
+        confidence score. Kept so existing callers keep working."""
         return self.get("confidence")
 
     @property
@@ -1085,9 +1085,9 @@ class Sutro:
                 advertised deadline for polling.
                 Aborting a known native run requests cancellation with at most
                 two additional seconds for cancellation.
-            confidence_scoring (bool, optional): Whether to compute a
-                confidence score. On by default. When off, ``confidence``
-                is ``None``.
+            confidence_scoring (bool, optional): Deprecated. Deployments
+                no longer compute a confidence score, so this has no effect
+                and ``confidence`` is always ``1.0``.
 
         Returns:
             FunctionRunResult: The response payload, with ``output``,

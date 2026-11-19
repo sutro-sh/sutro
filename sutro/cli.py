@@ -453,7 +453,7 @@ def load_json_input(raw: str):
 @click.option(
     "--no-confidence-scoring",
     is_flag=True,
-    help="Skip the confidence score.",
+    help="Deprecated; has no effect. Confidence scores are no longer computed.",
 )
 def run(name, input_value, no_confidence_scoring):
     """Run a Function on one input and print the JSON response."""
