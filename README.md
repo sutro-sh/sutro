@@ -305,9 +305,7 @@ results = so.get_job_results(job_id, include_inputs=True)
 print(results.head())
 ```
 
-The result helper above is convenient for manageable result sets. For large production results, use the resumable Parquet results-download workflow in the [Batch documentation](https://docs.sutro.sh/batch-api-reference/job-results-url). You can also monitor live progress, inspect samples, tag jobs, and share results from the Sutro web app.
-
-![Production Job Result](./assets/webui.gif)
+The result helper above is convenient for manageable result sets. For large production results, use the resumable Parquet results-download workflow in the [Batch documentation](https://docs.sutro.sh/batch-api-reference/job-results-url). You can also follow progress, inspect sample outputs, download results, and cancel jobs from the **Batch** page of your Sutro deployment.
 
 ## Data Sources
 
@@ -406,9 +404,9 @@ The SDK has no centralized API fallback. Requests and deployment API keys are
 sent only to the Sutro deployment configured by `SUTRO_API_URL`. Manage and
 revoke those keys from that deployment's **API Keys** panel.
 
-Job data is retained for up to 90 days by default, with configurable retention
-options in the web app. Enterprise deployments can support custom retention,
-custom integrations, or isolated cloud requirements.
+Job data is retained for up to 90 days by default. Custom retention is
+available on request, and enterprise deployments can also support custom
+integrations or isolated cloud requirements.
 
 For security, deployment, or procurement questions, contact [team@sutro.sh](mailto:team@sutro.sh).
 
