@@ -8,6 +8,7 @@ class JobStatus(str, Enum):
     QUEUED = "QUEUED"  # Job is waiting to start
     STARTING = "STARTING"  # Job is in the process of starting up
     RUNNING = "RUNNING"  # Job is actively running
+    RECOVERING = "RECOVERING"  # Keep polling the same job ID
     SUCCEEDED = "SUCCEEDED"  # Job completed successfully
     CANCELLING = "CANCELLING"  # Job is in the process of being canceled
     CANCELLED = "CANCELLED"  # Job was canceled by the user

@@ -389,6 +389,14 @@ class BatchCliTests(unittest.TestCase):
         self.assertTrue(any("RUNNING" in message for message in self.messages))
         self.assertEqual(len(self.posts()), 1)
 
+    def test_release_recovery_keeps_polling_the_original_job(self):
+        self.client.statuses = ["STARTING", "RECOVERING", "QUEUED", "RUNNING", "SUCCEEDED"]
+        self.run_batch()
+        self.assertEqual(len(self.posts()), 1)
+        self.assertEqual(self.receipt()["job_id"], JOB)
+        self.assertTrue(any("RECOVERING" in message for message in self.messages))
+        self.assertTrue(self.client.downloads)
+
     def test_timeout_keeps_receipt_and_resume_does_not_submit(self):
         self.client.statuses = ["RUNNING"]
         clock = [0]
