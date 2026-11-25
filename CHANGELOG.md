@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.1
+
+- Recognize the `RECOVERING` Batch job status. Clients can keep polling the
+  original job ID while recovery is in progress.
+
 ## 0.3.0
 
 Breaking changes:
